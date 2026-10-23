@@ -77,7 +77,11 @@ const NAV_ITEMS: NavItem[] = [
     href: "/applications",
     icon: <ClipboardList className="size-4" aria-hidden />,
   },
-  { label: "设置", icon: <Settings className="size-4" aria-hidden />, hint: "M6" },
+  {
+    label: "设置",
+    href: "/settings/email",
+    icon: <Settings className="size-4" aria-hidden />,
+  },
 ];
 
 function isActive(pathname: string, href: string): boolean {
@@ -167,7 +171,7 @@ export function AppShell({
           <div className="rounded-lg bg-slate-900 p-3">
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-400">当前阶段</span>
-              <span className="font-mono text-sky-300">M4</span>
+              <span className="font-mono text-sky-300">M6</span>
             </div>
             <p className="mt-2 text-xs leading-relaxed text-slate-500">
               简历解析、个人画像、可解释匹配与 LangGraph 多 Agent 工作流已可用。

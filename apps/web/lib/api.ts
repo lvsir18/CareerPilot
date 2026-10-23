@@ -652,6 +652,31 @@ export async function fetchCurrentUser(cookie: string): Promise<SessionUser | nu
   return result.body.data;
 }
 
+export async function fetchJobLeads(
+  cookie: string,
+  filters: { query?: string; company?: string } = {},
+): Promise<ApiResult<JobLead[]>> {
+  const query = new URLSearchParams();
+  if (filters.query) query.set("query", filters.query);
+  if (filters.company) query.set("company", filters.company);
+  const suffix = query.toString();
+  const result = await fetchJson(`/api/v1/job-leads${suffix ? `?${suffix}` : ""}`, { cookie });
+  if (!result) {
+    return { ok: false, error: { code: "NETWORK_ERROR", message: "无法连接 API 服务" } };
+  }
+  if (!result.ok) {
+    return { ok: false, error: toApiError(result.body, result.status) };
+  }
+  const data = isRecord(result.body) ? result.body.data : null;
+  if (!Array.isArray(data)) {
+    return {
+      ok: false,
+      error: { code: "UNEXPECTED_RESPONSE", message: "候选线索数据格式不正确" },
+    };
+  }
+  return { ok: true, data: data as JobLead[] };
+}
+
 export async function fetchJobs(
   filters: JobFilters,
   cookie: string,
@@ -823,4 +848,64 @@ export interface AgentRunEventItem {
   event_type: string;
   safe_payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface TencentImportJob {
+  title: string;
+  city: string | null;
+  cities: string | null;
+  job_type: string | null;
+  project: string | null;
+  department: string | null;
+  source_url: string;
+}
+
+export interface TencentImportResult {
+  company: string;
+  project: string;
+  keyword: string;
+  matched: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  jobs: TencentImportJob[];
+  failures: { postId: string; reason: string }[];
+}
+
+export interface OfficialSourceInfo {
+  key: string;
+  label: string;
+  mode: "api" | "rendered";
+  note: string;
+}
+
+export interface OfficialSearchCompany {
+  key: string;
+  label: string;
+  mode: "api" | "rendered";
+  fetched: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  error: string | null;
+}
+
+export interface OfficialSearchJob {
+  company: string;
+  title: string;
+  city: string | null;
+  job_type: string | null;
+  recruitment_program: string | null;
+  source_url: string;
+  jd_length: number;
+  requirements: number;
+}
+
+export interface OfficialSearchResult {
+  keyword: string;
+  created: number;
+  updated: number;
+  unchanged: number;
+  companies: OfficialSearchCompany[];
+  jobs: OfficialSearchJob[];
 }

@@ -35,6 +35,14 @@ _POLL_INTERVAL = 0.7
 _MAX_STREAM_SECONDS = 600
 
 
+def _auto_title(message: str, limit: int = 30) -> str:
+    """Give an untouched conversation a readable name from its first message."""
+    first_line = " ".join(message.strip().splitlines()[0].split()) if message.strip() else ""
+    if not first_line:
+        return "新对话"
+    return first_line if len(first_line) <= limit else f"{first_line[:limit]}…"
+
+
 def _read(run) -> AgentRunRead:
     return AgentRunRead(
         id=run.id,
@@ -59,7 +67,7 @@ def create_run(
     user: CurrentUser,
 ) -> DataResponse[AgentRunRead]:
     # Ownership is enforced before any run is created.
-    _thread(session, user, payload.thread_id)
+    thread = _thread(session, user, payload.thread_id)
     service = AgentRunService(session)
     run, created = service.create_run(
         user_id=user.id,
@@ -68,6 +76,9 @@ def create_run(
         message=payload.message,
     )
     if created:
+        if thread.title in {"新对话", ""}:
+            thread.title = _auto_title(payload.message)
+            session.commit()
         # Fire-and-forget dispatch; a failed send leaves the run queued and the
         # reaper (or a retry) can pick it up without duplicating execution.
         with contextlib.suppress(Exception):

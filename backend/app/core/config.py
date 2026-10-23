@@ -76,8 +76,8 @@ class Settings(BaseSettings):
     tavily_api_key: str | None = None
     tavily_search_depth: Literal["basic", "advanced"] = "basic"
     tavily_max_results: int = Field(default=10, ge=1, le=20)
-    tavily_max_queries_per_request: int = Field(default=10, ge=1, le=20)
-    search_max_queries_per_request: int = Field(default=10, ge=1, le=20)
+    tavily_max_queries_per_request: int = Field(default=20, ge=1, le=20)
+    search_max_queries_per_request: int = Field(default=20, ge=1, le=20)
     search_max_concurrent_requests: int = Field(default=1, ge=1, le=5)
     tavily_max_query_terms: int = Field(default=3, ge=1, le=5)
     tavily_extract_depth: Literal["basic", "advanced"] = "basic"

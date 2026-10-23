@@ -21,6 +21,8 @@ from app.agents.supervisor import build_supervisor
 from app.core.config import Settings
 from app.db.models.user import User
 
+_HISTORY_ROLES = {"human": "user", "ai": "assistant"}
+
 
 def _thread_key(user_id: UUID, thread_id: str) -> str:
     return f"{user_id}:{thread_id}"
@@ -120,6 +122,11 @@ class AgentService:
         result: list[dict[str, str]] = []
         for message in messages:
             role = getattr(message, "type", type(message).__name__)
+            # Chat UI only renders the conversation itself; tool call payloads
+            # are technical detail and would otherwise leak as raw JSON.
+            mapped = _HISTORY_ROLES.get(str(role))
+            if mapped is None:
+                continue
             content = getattr(message, "content", "")
             if isinstance(content, list):
                 content = " ".join(
@@ -127,7 +134,7 @@ class AgentService:
                     for part in content
                 )
             if content:
-                result.append({"role": role, "content": str(content)})
+                result.append({"role": mapped, "content": str(content)})
         return result
 
     def cancel(self, user: User, thread_id: str) -> None:

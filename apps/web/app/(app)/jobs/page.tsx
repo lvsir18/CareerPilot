@@ -4,7 +4,8 @@ import { ArrowLeft, ArrowRight, Briefcase, CircleAlert, Search } from "lucide-re
 
 import { JobCard } from "@/components/job-card";
 import { StatusPill } from "@/components/status-pill";
-import { fetchJobs } from "@/lib/api";
+import { fetchJobLeads, fetchJobs } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { jobPageHref, parseJobFilters, type JobFilters } from "@/lib/job-filters";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +29,10 @@ export default async function JobsPage({
 }) {
   const filters = parseJobFilters(await searchParams);
   const cookie = (await cookies()).toString();
-  const result = await fetchJobs(filters, cookie, PAGE_SIZE);
+  const [result, leadsResult] = await Promise.all([
+    fetchJobs(filters, cookie, PAGE_SIZE),
+    fetchJobLeads(cookie, { query: filters.q || undefined }),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -36,7 +40,7 @@ export default async function JobsPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">岗位库</h1>
           <p className="mt-1 text-sm text-slate-600">
-            所有岗位保留来源类型与原始链接；发布时间未知时不会推测为“最近发布”。
+            这里只收录已读取到官方详情页的岗位；搜索命中的候选链接在页面底部单独列出，核验通过后才会进入岗位库。
           </p>
         </div>
         <StatusPill tone="neutral">M1 · 只读岗位数据</StatusPill>
@@ -224,6 +228,48 @@ export default async function JobsPage({
                 <span />
               )}
             </nav>
+          ) : null}
+
+          {leadsResult.ok && leadsResult.data.length > 0 ? (
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-slate-900">候选线索（未核验）</h2>
+                <span className="text-xs text-slate-500">
+                  共 {leadsResult.data.length} 条搜索命中；只有成功读取官方详情页才会进入上方岗位库
+                </span>
+              </div>
+              <ul className="mt-3 divide-y divide-slate-100">
+                {leadsResult.data.slice(0, 20).map((lead) => (
+                  <li
+                    key={lead.id}
+                    className="flex flex-wrap items-center justify-between gap-2 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-slate-800">
+                        {lead.company} · {lead.title}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        最近发现 {formatDateTime(lead.last_seen_at)}
+                        {lead.published_date ? ` · 页面标注发布 ${lead.published_date}` : ""}
+                      </p>
+                    </div>
+                    <a
+                      href={lead.official_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-sky-700 hover:underline"
+                    >
+                      打开原始链接
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              {leadsResult.data.length > 20 ? (
+                <p className="mt-2 text-[11px] text-slate-400">
+                  此处只展示最近更新的 20 条，完整候选列表见「发现岗位」。
+                </p>
+              ) : null}
+            </section>
           ) : null}
         </>
       )}

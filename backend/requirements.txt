@@ -17,6 +17,9 @@ python-multipart==0.0.20
 cryptography==50.0.2
 PyMuPDF==1.26.6
 python-docx==1.2.0
+# Official-source renderer: loads SPA career pages and reads the JSON they fetch
+# (ByteDance/Xiaohongshu sign their XHRs in the browser, so replaying is not viable).
+playwright==1.64.1
 # M4 LangGraph multi-agent (Python 3.14 compatible, tested 2026-10-22)
 langgraph==1.2.16
 langchain==1.4.7

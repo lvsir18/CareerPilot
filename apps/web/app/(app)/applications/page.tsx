@@ -5,6 +5,7 @@ import { ArrowUpRight, CircleAlert, ClipboardList, Search } from "lucide-react";
 import { ApplicationStatusControl } from "@/components/application-status-control";
 import { ApplicationTimeline } from "@/components/application-timeline";
 import { CreateApplicationButton } from "@/components/create-application-button";
+import { DeleteApplicationButton } from "@/components/delete-application-button";
 import { EmailImportPanel } from "@/components/email-import-panel";
 import { EmailSyncCenter } from "@/components/email-sync-center";
 import { LinkApplicationForm } from "@/components/link-application-form";
@@ -280,10 +281,13 @@ export default async function ApplicationsPage({
                         {formatJobType(application.job?.job_type ?? null)}
                       </p>
                     </div>
-                    <ApplicationStatusControl
-                      applicationId={application.id}
-                      currentStatus={application.status}
-                    />
+                    <div className="flex items-center gap-2">
+                      <ApplicationStatusControl
+                        applicationId={application.id}
+                        currentStatus={application.status}
+                      />
+                      <DeleteApplicationButton applicationId={application.id} title={title} />
+                    </div>
                   </div>
 
                   <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-slate-500">
@@ -399,10 +403,20 @@ function ApplicationKanban({ applications }: { applications: ApplicationRecord[]
                 <p className="py-3 text-center text-[11px] text-slate-400">暂无</p>
               ) : (
                 rows.map((application) => (
-                  <article key={application.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <article
+                    key={application.id}
+                    className="group relative rounded-lg border border-slate-200 bg-white p-2.5"
+                  >
+                    <div className="absolute top-1 right-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                      <DeleteApplicationButton
+                        applicationId={application.id}
+                        title={titleOf(application)}
+                        compact
+                      />
+                    </div>
                     <Link
                       href={`/applications/${application.id}`}
-                      className="block truncate text-xs font-medium text-slate-800 hover:text-sky-700"
+                      className="block truncate pr-5 text-xs font-medium text-slate-800 hover:text-sky-700"
                     >
                       {titleOf(application)}
                     </Link>
@@ -457,9 +471,19 @@ function ApplicationTable({ applications }: { applications: ApplicationRecord[] 
                   : "未确认"}
               </td>
               <td className="px-4 py-2">
-                <Link href={`/applications/${application.id}`} className="text-sky-700 hover:underline">
-                  详情
-                </Link>
+                <div className="flex items-center gap-2">
+                  <Link
+                    href={`/applications/${application.id}`}
+                    className="text-sky-700 hover:underline"
+                  >
+                    详情
+                  </Link>
+                  <DeleteApplicationButton
+                    applicationId={application.id}
+                    title={titleOf(application)}
+                    compact
+                  />
+                </div>
               </td>
             </tr>
           ))}

@@ -188,6 +188,16 @@ class SafeHttpClient:
             raise ConnectorParseError("来源 JSON 顶层结构异常")
         return payload
 
+    def post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self.request("POST", url, json=payload)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise ConnectorParseError("来源返回的不是合法 JSON") from exc
+        if not isinstance(body, dict):
+            raise ConnectorParseError("来源 JSON 顶层结构异常")
+        return body
+
     def get_json(self, url: str) -> dict[str, Any]:
         response = self.request("GET", url)
         try:

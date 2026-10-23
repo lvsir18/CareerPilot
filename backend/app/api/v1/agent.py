@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
 
 from app.agents.llm import LLMNotConfiguredError
 from app.agents.service import AgentService
 from app.auth.dependencies import AppSettings, CurrentUser, DbSession
 from app.core.errors import AppError
+from app.db.models.agent_run import AgentRun
 from app.db.models.agent_thread import AgentThread
 from app.schemas.agent import (
     AgentMessageRead,
@@ -18,6 +19,7 @@ from app.schemas.agent import (
     AgentRunRequest,
     AgentRunResult,
     AgentThreadRead,
+    AgentThreadUpdate,
 )
 from app.schemas.common import DataResponse
 from app.security.csrf import require_csrf
@@ -71,6 +73,42 @@ def list_threads(session: DbSession, user: CurrentUser) -> DataResponse[list[Age
     return DataResponse(data=[_thread_read(t) for t in threads])
 
 
+@router.patch(
+    "/threads/{thread_id}",
+    response_model=DataResponse[AgentThreadRead],
+    summary="重命名会话",
+)
+def rename_thread(
+    thread_id: UUID,
+    payload: AgentThreadUpdate,
+    session: DbSession,
+    user: CurrentUser,
+) -> DataResponse[AgentThreadRead]:
+    thread = _thread(session, user, thread_id)
+    title = " ".join(payload.title.split())
+    if not title:
+        raise AppError(
+            code="AGENT_THREAD_TITLE_REQUIRED", message="会话名称不能为空", status_code=422
+        )
+    thread.title = title[:80]
+    session.commit()
+    session.refresh(thread)
+    return DataResponse(data=_thread_read(thread))
+
+
+@router.delete(
+    "/threads/{thread_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除会话（同时删除其运行记录与事件）",
+)
+def delete_thread(thread_id: UUID, session: DbSession, user: CurrentUser) -> Response:
+    thread = _thread(session, user, thread_id)
+    # agent_runs 与 agent_run_events 通过外键 ON DELETE CASCADE 一并清理。
+    session.delete(thread)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get(
     "/threads/{thread_id}/messages",
     response_model=DataResponse[list[AgentMessageRead]],
@@ -83,6 +121,26 @@ def list_messages(
     user: CurrentUser,
 ) -> DataResponse[list[AgentMessageRead]]:
     _thread(session, user, thread_id)
+    # Rebuild the transcript from persisted runs: the graph checkpoint only
+    # stores the human turn plus tool traffic, so the final answer would be
+    # missing after a reload. Runs keep both the prompt and the answer.
+    runs = session.scalars(
+        select(AgentRun)
+        .where(AgentRun.thread_id == thread_id, AgentRun.user_id == user.id)
+        .order_by(AgentRun.created_at.asc())
+    ).all()
+    messages: list[AgentMessageRead] = []
+    for run in runs:
+        prompt = (run.input_payload or {}).get("message")
+        if isinstance(prompt, str) and prompt.strip():
+            messages.append(AgentMessageRead(role="user", content=prompt))
+        result = run.result if isinstance(run.result, dict) else None
+        answer = result.get("final_answer") if result else None
+        if isinstance(answer, str) and answer.strip():
+            messages.append(AgentMessageRead(role="assistant", content=answer))
+    if messages:
+        return DataResponse(data=messages)
+
     history = AgentService(session, settings).history(user, str(thread_id))
     return DataResponse(data=[AgentMessageRead(**item) for item in history])
 
@@ -111,7 +169,6 @@ def run_agent(
 
     if thread.title in {"新对话", ""}:
         thread.title = payload.message[:30] or "新对话"
-    thread.updated_at = AgentThread.updated_at  # refresh via commit below
     session.commit()
 
     return DataResponse(data=AgentRunResult(thread_id=thread_id, **result))

@@ -17,6 +17,10 @@ class AgentThreadRead(BaseModel):
     updated_at: datetime
 
 
+class AgentThreadUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+
+
 class AgentRunRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     request_id: str | None = Field(default=None, max_length=64)

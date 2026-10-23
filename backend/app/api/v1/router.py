@@ -19,10 +19,12 @@ from app.api.v1 import (
     jobs,
     mailboxes,
     matches,
+    official,
     profile,
     resumes,
     saved_jobs,
     system,
+    tencent,
 )
 
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -43,4 +45,6 @@ api_v1_router.include_router(job_sources.router)
 api_v1_router.include_router(job_syncs.router)
 api_v1_router.include_router(job_imports.router)
 api_v1_router.include_router(job_leads.router)
+api_v1_router.include_router(tencent.router)
+api_v1_router.include_router(official.router)
 api_v1_router.include_router(external_accounts.router)

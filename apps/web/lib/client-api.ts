@@ -25,13 +25,14 @@ import {
   type JobLead,
   type MailboxConnection,
   type MailboxSyncRun,
-  type Page,
   type Profile,
   type RecruitmentCandidate,
   type RecommendationItem,
   type Resume,
   type SavedJob,
   type SessionUser,
+  type OfficialSearchResult,
+  type TencentImportResult,
 } from "@/lib/api";
 
 const CLIENT_TIMEOUT_MS = 6000;
@@ -115,8 +116,16 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<A
       return { ok: true, data: (body as { data: T }).data };
     }
     return { ok: true, data: undefined as T };
-  } catch {
-    return { ok: false, error: { code: "NETWORK_ERROR", message: "无法连接 API 服务" } };
+  } catch (error) {
+    const timedOut =
+      error instanceof DOMException &&
+      (error.name === "TimeoutError" || error.name === "AbortError");
+    return {
+      ok: false,
+      error: timedOut
+        ? { code: "TIMEOUT", message: "请求超时：检索耗时较长，请稍后重试或缩小范围" }
+        : { code: "NETWORK_ERROR", message: "无法连接 API 服务" },
+    };
   }
 }
 
@@ -183,6 +192,10 @@ export function createApplication(
   status = "preparing",
 ): Promise<ApiResult<ApplicationRecord>> {
   return createApplicationRecord({ job_id: jobId, status });
+}
+
+export function deleteApplication(applicationId: string): Promise<ApiResult<undefined>> {
+  return request<undefined>(`/api/v1/applications/${applicationId}`, { method: "DELETE" });
 }
 
 export function fetchApplicationDetail(
@@ -312,7 +325,11 @@ export function discoverJobs(
       search.set(key, String(value));
     }
   });
-  return request<DiscoveryResponse>(`/api/v1/jobs/discover?${search.toString()}`);
+  // Discovery performs live provider queries on the server; a 20-query sweep
+  // routinely needs 10-40s, so it must not share the default 6s budget.
+  return request<DiscoveryResponse>(`/api/v1/jobs/discover?${search.toString()}`, {
+    timeoutMs: 120_000,
+  });
 }
 
 export function verifyJobLead(leadId: string): Promise<ApiResult<unknown>> {
@@ -412,13 +429,13 @@ export function matchJob(jobId: string): Promise<ApiResult<RecommendationItem>> 
 
 export function getRecommendations(
   params: { companies?: string[]; cities?: string[]; job_types?: string[]; exclude_applied?: boolean } = {},
-): Promise<ApiResult<Page<RecommendationItem>>> {
+): Promise<ApiResult<RecommendationItem[]>> {
   const search = new URLSearchParams();
   if (params.companies?.length) search.set("companies", params.companies.join(","));
   if (params.cities?.length) search.set("cities", params.cities.join(","));
   if (params.job_types?.length) search.set("job_types", params.job_types.join(","));
   if (params.exclude_applied) search.set("exclude_applied", "true");
-  return request<Page<RecommendationItem>>(`/api/v1/matches/recommendations?${search.toString()}`);
+  return request<RecommendationItem[]>(`/api/v1/matches/recommendations?${search.toString()}`);
 }
 
 export function createAgentThread(): Promise<ApiResult<AgentThread>> {
@@ -427,6 +444,20 @@ export function createAgentThread(): Promise<ApiResult<AgentThread>> {
 
 export function listAgentThreads(): Promise<ApiResult<AgentThread[]>> {
   return request<AgentThread[]>("/api/v1/agent/threads");
+}
+
+export function renameAgentThread(
+  threadId: string,
+  title: string,
+): Promise<ApiResult<AgentThread>> {
+  return request<AgentThread>(`/api/v1/agent/threads/${threadId}`, {
+    method: "PATCH",
+    body: { title },
+  });
+}
+
+export function deleteAgentThread(threadId: string): Promise<ApiResult<undefined>> {
+  return request<undefined>(`/api/v1/agent/threads/${threadId}`, { method: "DELETE" });
 }
 
 export function listAgentMessages(threadId: string): Promise<ApiResult<AgentMessage[]>> {
@@ -564,4 +595,30 @@ export function getAgentRunEvents(
 
 export function cancelAgentRun(runId: string): Promise<ApiResult<AgentRun>> {
   return request<AgentRun>(`/api/v1/agent/runs/${runId}/cancel`, { method: "POST" });
+}
+
+export function importTencentJobs(payload: {
+  keyword?: string;
+  project?: string;
+  limit?: number;
+}): Promise<ApiResult<TencentImportResult>> {
+  return request<TencentImportResult>("/api/v1/tencent/jobs/import", {
+    method: "POST",
+    body: payload,
+    timeoutMs: 90_000,
+  });
+}
+
+export function searchOfficialJobs(payload: {
+  companies: string[];
+  keyword?: string;
+  limit?: number;
+  project?: string;
+}): Promise<ApiResult<OfficialSearchResult>> {
+  return request<OfficialSearchResult>("/api/v1/official/jobs/search", {
+    method: "POST",
+    body: payload,
+    // Rendered sources open a real page per company (roughly 8-12s each).
+    timeoutMs: 180_000,
+  });
 }

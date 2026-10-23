@@ -29,7 +29,7 @@ def test_tools_build_and_have_schemas(db_session: Session, settings: Settings) -
     user = _user(db_session, "tools@example.com")
     ctx = RuntimeContext(user_id=user.id, user=user, session=db_session, settings=settings)
     tools = build_all_tools(ctx)
-    assert len(tools) == 9
+    assert len(tools) == 10
     for tool in tools:
         assert tool.name
         assert tool.args_schema is not None
@@ -38,7 +38,7 @@ def test_tools_build_and_have_schemas(db_session: Session, settings: Settings) -
 def test_profile_tool_reads_only_current_user(db_session: Session, settings: Settings) -> None:
     user_a = _user(db_session, "agent-a@example.com")
     ctx_a = RuntimeContext(user_id=user_a.id, user=user_a, session=db_session, settings=settings)
-    tool = build_all_tools(ctx_a)[5]  # get_profile_summary
+    tool = next(t for t in build_all_tools(ctx_a) if t.name == "get_profile_summary")
     result = tool.invoke({})
     assert result["confirmed"] is False
     assert result["version"] == 0

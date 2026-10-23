@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import UTC, date, datetime
 from typing import Any
@@ -368,67 +370,102 @@ class SearchService:
             self._settings.tavily_max_queries_per_request,
         )
         if len(tasks) > max_queries:
-            warnings.append(f"查询数超过上限，仅执行前 {max_queries} 个企业/关键词任务")
-            tasks = tasks[:max_queries]
+            total = len(tasks)
+            # Interleave by term so a tight budget still covers every company
+            # once before any company gets a second keyword layer.
+            by_term: dict[str, list[tuple[str, str, str, list[str]]]] = {}
+            for task in tasks:
+                by_term.setdefault(task[1], []).append(task)
+            interleaved: list[tuple[str, str, str, list[str]]] = []
+            depth = max(len(bucket) for bucket in by_term.values())
+            for index in range(depth):
+                for bucket in by_term.values():
+                    if index < len(bucket):
+                        interleaved.append(bucket[index])
+            tasks = interleaved[:max_queries]
+            warnings.append(
+                f"查询数超过上限（共 {total} 个任务），已优先执行覆盖更多公司的前 {max_queries} 个"
+            )
 
         executed_queries = 0
+        merge_lock = threading.Lock()
+
+        def merge(
+            company: str,
+            layer: str,
+            local_warnings: list[str],
+            result: tuple[list[SearchHit], int, int, int, bool, list[str]],
+        ) -> None:
+            nonlocal provider_queries, cached_queries, credits_estimated, executed_queries
+            raw_hits, queries, cached, credits, had_error, used = result
+            with merge_lock:
+                warnings.extend(local_warnings)
+                diag = diagnostics[company]
+                diag.queries += queries
+                diag.provider_errors += 1 if had_error else 0
+                layers_by_company[company].add(layer)
+                executed_queries += queries
+                provider_queries += queries
+                cached_queries += cached
+                credits_estimated += credits
+                for name in used:
+                    if name not in providers_used:
+                        providers_used.append(name)
+                for hit in raw_hits:
+                    diag.raw_results += 1
+                    analyzed = inspect_url(hit.url)
+                    if analyzed is None:
+                        diag.dropped_invalid += 1
+                        continue
+                    if analyzed.url_type in {
+                        "official_job_detail",
+                        "trusted_ats_job_detail",
+                    }:
+                        if analyzed.company != company:
+                            diag.dropped_unrelated += 1
+                            continue
+                        diag.detail_candidates += 1
+                        hit.url = analyzed.url
+                        hit.company = analyzed.company
+                        hit.url_type = analyzed.url_type
+                        hit.source_kind = analyzed.source_kind
+                        hit.trusted_tenant = analyzed.tenant_host
+                        hits.append(hit)
+                    elif analyzed.url_type in {
+                        "official_job_list",
+                        "trusted_ats_job_list",
+                        "recruitment_landing_page",
+                    }:
+                        if analyzed.company != company:
+                            diag.dropped_unrelated += 1
+                        else:
+                            diag.dropped_list_or_landing += 1
+                    else:
+                        diag.dropped_unrelated += 1
 
         def run(company: str, query_text: str, layer: str, domains: list[str]) -> None:
-            nonlocal provider_queries, cached_queries, credits_estimated, executed_queries
-            raw_hits, queries, cached, credits, had_error, used = self._run_task(
+            local_warnings: list[str] = []
+            result = self._run_task(
                 company,
                 query_text,
                 domains,
                 layer,
                 limit,
-                warnings,
+                local_warnings,
                 user_id,
             )
-            diag = diagnostics[company]
-            diag.queries += queries
-            diag.provider_errors += 1 if had_error else 0
-            layers_by_company[company].add(layer)
-            executed_queries += queries
-            provider_queries += queries
-            cached_queries += cached
-            credits_estimated += credits
-            for name in used:
-                if name not in providers_used:
-                    providers_used.append(name)
-            for hit in raw_hits:
-                diag.raw_results += 1
-                analyzed = inspect_url(hit.url)
-                if analyzed is None:
-                    diag.dropped_invalid += 1
-                    continue
-                if analyzed.url_type in {
-                    "official_job_detail",
-                    "trusted_ats_job_detail",
-                }:
-                    if analyzed.company != company:
-                        diag.dropped_unrelated += 1
-                        continue
-                    diag.detail_candidates += 1
-                    hit.url = analyzed.url
-                    hit.company = analyzed.company
-                    hit.url_type = analyzed.url_type
-                    hit.source_kind = analyzed.source_kind
-                    hit.trusted_tenant = analyzed.tenant_host
-                    hits.append(hit)
-                elif analyzed.url_type in {
-                    "official_job_list",
-                    "trusted_ats_job_list",
-                    "recruitment_landing_page",
-                }:
-                    if analyzed.company != company:
-                        diag.dropped_unrelated += 1
-                    else:
-                        diag.dropped_list_or_landing += 1
-                else:
-                    diag.dropped_unrelated += 1
+            merge(company, layer, local_warnings, result)
 
-        for company, term, layer, domains in tasks:
-            run(company, term, layer, domains)
+        workers = min(self._settings.search_max_concurrent_requests, len(tasks) or 1)
+        if workers > 1 and len(tasks) > 1:
+            # Provider calls dominate latency (20 sequential queries ≈ 40s), so
+            # run them in a bounded pool; shared state is merged under a lock.
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for task in tasks:
+                    pool.submit(run, *task)
+        else:
+            for company, term, layer, domains in tasks:
+                run(company, term, layer, domains)
 
         # Bounded fallback: exact -> broader keywords -> recruitment entry.
         # It only runs when the exact layer found no verified detail candidate,

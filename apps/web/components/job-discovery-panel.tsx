@@ -7,13 +7,22 @@ import { useEffect, useState } from "react";
 import { CreateApplicationButton } from "@/components/create-application-button";
 import { JobCard } from "@/components/job-card";
 import { StatusPill } from "@/components/status-pill";
-import { discoverJobs, verifyJobLead } from "@/lib/client-api";
+import { discoverJobs, searchOfficialJobs, verifyJobLead } from "@/lib/client-api";
 import type { DiscoveryResponse, JobLead } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import {
   formatJobFamily,
   verificationTone,
 } from "@/lib/job-display";
+
+const OFFICIAL_COMPANIES = [
+  { key: "tencent", label: "腾讯" },
+  { key: "bytedance", label: "字节跳动" },
+  { key: "xiaohongshu", label: "小红书" },
+  { key: "bilibili", label: "哔哩哔哩" },
+  { key: "meituan", label: "美团" },
+];
 
 const COMPANIES = [
   { value: "bytedance", label: "字节跳动", priority: "P0" },
@@ -108,6 +117,11 @@ export function JobDiscoveryPanel() {
   const [busy, setBusy] = useState(false);
   const [pendingVerify, setPendingVerify] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [officialKeyword, setOfficialKeyword] = useState(() => readUrlFilter("q") ?? "");
+  const [officialCompanies, setOfficialCompanies] = useState<string[]>(["tencent"]);
+  const [tencentProject, setTencentProject] = useState("日常实习");
+  const [officialBusy, setOfficialBusy] = useState(false);
+  const [officialNotice, setOfficialNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -162,6 +176,41 @@ export function JobDiscoveryPanel() {
       return;
     }
     setResult(response.data);
+  }
+
+  async function runOfficialSearch() {
+    if (!officialCompanies.length) {
+      setOfficialNotice("请至少选择一家企业");
+      return;
+    }
+    setOfficialBusy(true);
+    setOfficialNotice(null);
+    const response = await searchOfficialJobs({
+      companies: officialCompanies,
+      keyword: officialKeyword.trim() || undefined,
+      limit: 5,
+      project: officialCompanies.includes("tencent") ? tencentProject : undefined,
+    });
+    setOfficialBusy(false);
+    if (!response.ok) {
+      setOfficialNotice(`检索失败：${response.error.message}`);
+      return;
+    }
+    const data = response.data;
+    const failed = data.companies.filter((item) => item.error);
+    const parts = data.companies
+      .filter((item) => !item.error)
+      .map((item) => `${item.label} ${item.fetched} 条`);
+    const lines = [
+      parts.length ? `官方直连：${parts.join("、")}` : "官方直连未返回岗位",
+      `新增 ${data.created}、更新 ${data.updated}、无变化 ${data.unchanged}`,
+    ];
+    if (failed.length) {
+      lines.push(
+        `失败：${failed.map((item) => `${item.label}（${item.error}）`).join("；")}`,
+      );
+    }
+    setOfficialNotice(`${lines.join("；")}。已写入岗位库，可在「岗位库」查看完整 JD。`);
   }
 
   async function verify(lead: JobLead) {
@@ -316,6 +365,84 @@ export function JobDiscoveryPanel() {
           </Link>
         </div>
         {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
+      </section>
+
+      <section className="rounded-2xl border border-sky-200 bg-sky-50/50 p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">企业官网直连检索</h2>
+          <span className="text-[11px] text-slate-500">
+            直接读取官方招聘页，不消耗搜索额度
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-slate-600">
+          这些公司的招聘页是前端渲染、抓 HTML 拿不到岗位；这里由服务端浏览器把关键词
+          输入官方搜索框，读取其返回的岗位数据，拿到标题、城市、招聘类型与完整 JD。
+          仅覆盖校招 / 实习（美团会先切到「应届校招」，不含社招）。
+        </p>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {OFFICIAL_COMPANIES.map((item) => {
+            const active = officialCompanies.includes(item.key);
+            return (
+              <button
+                key={item.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() =>
+                  setOfficialCompanies((prev) =>
+                    prev.includes(item.key)
+                      ? prev.filter((key) => key !== item.key)
+                      : [...prev, item.key],
+                  )
+                }
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs transition",
+                  active
+                    ? "border-sky-600 bg-sky-600 text-white"
+                    : "border-slate-300 bg-white text-slate-600 hover:border-sky-400",
+                )}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="min-w-40 flex-1">
+            <span className="text-xs font-medium text-slate-600">关键词</span>
+            <input
+              value={officialKeyword}
+              onChange={(event) => setOfficialKeyword(event.target.value)}
+              placeholder="算法 / 大模型 / 推荐"
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="min-w-32">
+            <span className="text-xs font-medium text-slate-600">腾讯招聘项目</span>
+            <select
+              value={tencentProject}
+              onChange={(event) => setTencentProject(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="日常实习">日常实习</option>
+              <option value="应届实习">应届实习</option>
+              <option value="应届毕业生">应届毕业生</option>
+              <option value="青云计划-应届生">青云计划-应届生</option>
+              <option value="青云计划-实习生">青云计划-实习生</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void runOfficialSearch()}
+            disabled={officialBusy}
+            className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+          >
+            <ArrowUpRight className="size-4" aria-hidden />
+            {officialBusy ? "检索中..." : "直连检索"}
+          </button>
+        </div>
+        {officialNotice ? (
+          <p className="mt-2 text-xs text-slate-700">{officialNotice}</p>
+        ) : null}
       </section>
 
       {result ? (

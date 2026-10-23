@@ -26,7 +26,7 @@ export default function MatchesPage() {
       setError(result.error.message);
       return;
     }
-    setItems(result.data.data);
+    setItems(Array.isArray(result.data) ? result.data : []);
   }
 
   useEffect(() => {
@@ -102,8 +102,8 @@ export default function MatchesPage() {
                   <div>
                     <p className="font-medium text-slate-600">符合要求</p>
                     <div className="mt-1 flex flex-wrap gap-1.5">
-                      {item.match.matched_skills.length ? (
-                        item.match.matched_skills.map((skill) => (
+                      {(item.match.matched_skills ?? []).length ? (
+                        (item.match.matched_skills ?? []).map((skill) => (
                           <span
                             key={skill}
                             className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700"
@@ -120,8 +120,8 @@ export default function MatchesPage() {
                   <div>
                     <p className="font-medium text-slate-600">简历暂未体现</p>
                     <div className="mt-1 flex flex-wrap gap-1.5">
-                      {item.match.unverified_skills.length ? (
-                        item.match.unverified_skills.map((skill) => (
+                      {(item.match.unverified_skills ?? []).length ? (
+                        (item.match.unverified_skills ?? []).map((skill) => (
                           <span
                             key={skill}
                             className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600"
@@ -142,9 +142,9 @@ export default function MatchesPage() {
               <p className="mt-3 text-xs leading-relaxed text-slate-600">
                 推荐原因：{item.match.explanation || "暂无解释"}
               </p>
-              {item.match.eligibility_reasons.length ? (
+              {(item.match.eligibility_reasons ?? []).length ? (
                 <ul className="mt-2 space-y-0.5 text-xs text-rose-600">
-                  {item.match.eligibility_reasons.map((reason) => (
+                  {(item.match.eligibility_reasons ?? []).map((reason) => (
                     <li key={reason}>{reason}</li>
                   ))}
                 </ul>

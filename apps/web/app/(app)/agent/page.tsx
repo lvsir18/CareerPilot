@@ -1,16 +1,19 @@
 "use client";
 
-import { Bot, Plus, Send } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bot, Pencil, Plus, Send, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AgentMessageBubble } from "@/components/agent-message";
 import {
   cancelAgentRun,
   createAgentRun,
   createAgentThread,
+  deleteAgentThread,
   getAgentRun,
   listAgentMessages,
   listAgentThreads,
+  renameAgentThread,
   resumeAgent,
 } from "@/lib/client-api";
 import type {
@@ -20,11 +23,30 @@ import type {
   AgentRunResult,
   AgentThread,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
+
+const SUGGESTIONS = [
+  "帮我找北京的大模型实习",
+  "哪些岗位更适合我的简历？",
+  "看看我最近的申请进度",
+];
+
+function syncThreadUrl(threadId: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.history.replaceState(
+    null,
+    "",
+    threadId ? `/agent?thread=${encodeURIComponent(threadId)}` : "/agent",
+  );
+}
 
 export default function AgentPage() {
   const [threads, setThreads] = useState<AgentThread[]>([]);
   const [current, setCurrent] = useState<AgentThread | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [input, setInput] = useState(() => {
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("q") ?? "";
@@ -35,18 +57,72 @@ export default function AgentPage() {
   // Async execution state: the run is created immediately, then followed via SSE.
   const [run, setRun] = useState<AgentRun | null>(null);
   const [steps, setSteps] = useState<AgentRunEventItem[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
 
-  async function refreshThreads() {
+  const loadToken = useRef(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const refreshThreads = useCallback(async () => {
     const result = await listAgentThreads();
-    if (result.ok) setThreads(result.data);
-  }
+    if (!result.ok) {
+      return;
+    }
+    setThreads(result.data);
+    setCurrent((prev) => (prev ? (result.data.find((t) => t.id === prev.id) ?? prev) : prev));
+  }, []);
 
-  async function openThread(thread: AgentThread) {
+  const openThread = useCallback(async (thread: AgentThread) => {
+    const token = loadToken.current + 1;
+    loadToken.current = token;
     setCurrent(thread);
     setError(null);
+    setStructured(null);
+    setRun(null);
+    setSteps([]);
+    setMessages([]);
+    setLoadingMessages(true);
+    syncThreadUrl(thread.id);
     const result = await listAgentMessages(thread.id);
+    if (loadToken.current !== token) {
+      return;
+    }
     setMessages(result.ok ? result.data : []);
-  }
+    if (!result.ok) {
+      setError(result.error.message);
+    }
+    setLoadingMessages(false);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const result = await listAgentThreads();
+      if (!active) {
+        return;
+      }
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      setThreads(result.data);
+      const requested = new URLSearchParams(window.location.search).get("thread");
+      const target = result.data.find((item) => item.id === requested) ?? result.data[0];
+      if (target) {
+        await openThread(target);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [openThread]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [messages, loadingMessages, busy]);
 
   async function newThread() {
     const result = await createAgentThread();
@@ -54,9 +130,65 @@ export default function AgentPage() {
       setError(result.error.message);
       return;
     }
+    setThreads((prev) => [result.data, ...prev]);
     setCurrent(result.data);
     setMessages([]);
-    await refreshThreads();
+    setStructured(null);
+    setRun(null);
+    setSteps([]);
+    setError(null);
+    syncThreadUrl(result.data.id);
+  }
+
+  function startRename(thread: AgentThread) {
+    setEditingId(thread.id);
+    setDraftTitle(thread.title);
+  }
+
+  function cancelRename() {
+    setEditingId(null);
+  }
+
+  async function commitRename(thread: AgentThread) {
+    const title = draftTitle.trim();
+    setEditingId(null);
+    if (!title || title === thread.title) {
+      return;
+    }
+    const result = await renameAgentThread(thread.id, title);
+    if (!result.ok) {
+      setError(result.error.message);
+      return;
+    }
+    setThreads((prev) => prev.map((item) => (item.id === result.data.id ? result.data : item)));
+    setCurrent((prev) => (prev && prev.id === result.data.id ? result.data : prev));
+  }
+
+  async function removeThread(thread: AgentThread) {
+    const confirmed = window.confirm(
+      `确定删除会话「${thread.title}」？\n\n该会话的消息与运行记录会一并删除，且无法恢复。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    const result = await deleteAgentThread(thread.id);
+    if (!result.ok) {
+      setError(result.error.message);
+      return;
+    }
+    setThreads((prev) => prev.filter((item) => item.id !== thread.id));
+    if (editingId === thread.id) {
+      cancelRename();
+    }
+    if (current?.id === thread.id) {
+      setCurrent(null);
+      setMessages([]);
+      setSteps([]);
+      setStructured(null);
+      setRun(null);
+      syncThreadUrl(null);
+    }
+    void refreshThreads();
   }
 
   function applyFinal(data: AgentRunResult | null, status: string) {
@@ -163,15 +295,40 @@ export default function AgentPage() {
   }
 
   async function send() {
-    if (!input.trim() || !current) return;
+    const text = input.trim();
+    if (!text || busy) return;
+
+    let thread = current;
+    if (!thread) {
+      const created = await createAgentThread();
+      if (!created.ok) {
+        setError(created.error.message);
+        return;
+      }
+      thread = created.data;
+      setThreads((prev) => [created.data, ...prev]);
+      setCurrent(created.data);
+      syncThreadUrl(created.data.id);
+    }
+
     setBusy(true);
     setError(null);
     setSteps([]);
-    const userMessage: AgentMessage = { role: "user", content: input };
+    const userMessage: AgentMessage = { role: "user", content: text };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    // Mirror the backend auto-title immediately so the sidebar stops showing
+    // "新对话" while the first run is still queued.
+    const threadId = thread.id;
+    if (thread.title === "新对话") {
+      const nextTitle = text.length > 30 ? `${text.slice(0, 30)}…` : text;
+      setThreads((prev) =>
+        prev.map((item) => (item.id === threadId ? { ...item, title: nextTitle } : item)),
+      );
+      setCurrent((prev) => (prev && prev.id === threadId ? { ...prev, title: nextTitle } : prev));
+    }
     const result = await createAgentRun({
-      thread_id: current.id,
+      thread_id: thread.id,
       request_id:
         typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()
@@ -211,14 +368,34 @@ export default function AgentPage() {
     setStructured(result.data.structured ?? null);
   }
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch then setState
-    void refreshThreads();
-  }, []);
+  function renderTitleEditor(thread: AgentThread, className: string) {
+    return (
+      <input
+        autoFocus
+        value={draftTitle}
+        aria-label="会话名称"
+        title="回车保存，Esc 取消"
+        onChange={(event) => setDraftTitle(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void commitRename(thread);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            cancelRename();
+          }
+        }}
+        className={cn(
+          "min-w-0 rounded border border-sky-400 px-2 py-1 text-xs outline-none",
+          className,
+        )}
+      />
+    );
+  }
 
   return (
     <div className="flex h-[calc(100vh-6rem)] gap-4">
-      <aside className="w-56 shrink-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+      <aside className="flex w-60 shrink-0 flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
         <button
           type="button"
           onClick={() => void newThread()}
@@ -227,138 +404,216 @@ export default function AgentPage() {
           <Plus className="size-4" aria-hidden />
           新建对话
         </button>
-        <div className="mt-3 space-y-1">
-          {threads.map((thread) => (
-            <button
-              key={thread.id}
-              type="button"
-              onClick={() => void openThread(thread)}
-              className={`block w-full truncate rounded-lg px-3 py-2 text-left text-xs ${
-                current?.id === thread.id
-                  ? "bg-sky-50 text-sky-700"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              {thread.title}
-            </button>
-          ))}
+        <div className="mt-3 flex-1 space-y-1 overflow-y-auto">
+          {threads.length === 0 ? (
+            <p className="px-2 py-3 text-[11px] text-slate-400">还没有对话记录</p>
+          ) : (
+            threads.map((thread) => (
+              <div
+                key={thread.id}
+                className={cn(
+                  "group flex items-center rounded-lg pr-1",
+                  current?.id === thread.id ? "bg-sky-50" : "hover:bg-slate-50",
+                )}
+              >
+                {editingId === thread.id ? (
+                  renderTitleEditor(thread, "m-1 flex-1")
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void openThread(thread)}
+                      title={thread.title}
+                      className={cn(
+                        "min-w-0 flex-1 truncate px-3 py-2 text-left text-xs",
+                        current?.id === thread.id ? "text-sky-700" : "text-slate-600",
+                      )}
+                    >
+                      {thread.title}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startRename(thread)}
+                      aria-label={`重命名会话：${thread.title}`}
+                      title="重命名"
+                      className="rounded p-1 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:text-slate-700 focus-visible:opacity-100"
+                    >
+                      <Pencil className="size-3" aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void removeThread(thread)}
+                      aria-label={`删除会话：${thread.title}`}
+                      title="删除会话"
+                      className="rounded p-1 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:text-rose-600 focus-visible:opacity-100"
+                    >
+                      <Trash2 className="size-3" aria-hidden />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))
+          )}
         </div>
       </aside>
 
       <section className="flex flex-1 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
           <Bot className="size-4 text-slate-400" aria-hidden />
-          <span className="text-sm font-medium text-slate-700">智能求职助手</span>
+          {current ? (
+            editingId === current.id ? (
+              renderTitleEditor(current, "w-64")
+            ) : (
+              <>
+                <span className="max-w-[24rem] truncate text-sm font-medium text-slate-700">
+                  {current.title}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => startRename(current)}
+                  aria-label="重命名当前会话"
+                  title="重命名"
+                  className="rounded p-1 text-slate-400 hover:text-slate-700"
+                >
+                  <Pencil className="size-3" aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void removeThread(current)}
+                  aria-label="删除当前会话"
+                  title="删除会话"
+                  className="rounded p-1 text-slate-400 hover:text-rose-600"
+                >
+                  <Trash2 className="size-3" aria-hidden />
+                </button>
+              </>
+            )
+          ) : (
+            <span className="text-sm font-medium text-slate-700">智能求职助手</span>
+          )}
           <Link href="/discover" className="ml-auto text-xs text-sky-700 hover:underline">
             在招聘中心查看
           </Link>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto p-4">
-          {messages.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              问我「帮我找字节和小红书的大模型实习」或「哪些岗位更适合我的简历」。
-            </p>
-          ) : (
-            messages.map((message, index) => (
-              <div
-                key={index}
-                className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${
-                  message.role === "user"
-                    ? "ml-auto bg-sky-50 text-slate-800"
-                    : "bg-slate-100 text-slate-700"
-                }`}
-              >
-                {message.content}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
+          <div className="mx-auto w-full max-w-2xl space-y-3">
+            {loadingMessages ? (
+              <p className="text-sm text-slate-500">正在加载会话…</p>
+            ) : messages.length === 0 ? (
+              <div className="space-y-3">
+                <p className="text-sm text-slate-500">
+                  {current
+                    ? "问我「帮我找字节和小红书的大模型实习」或「哪些岗位更适合我的简历」。"
+                    : "从左侧选择一个历史对话，或直接输入需求开始新对话。"}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => setInput(suggestion)}
+                      className="rounded-full border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:border-sky-400 hover:text-sky-700"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
               </div>
-            ))
-          )}
-          {error ? <p className="text-sm text-rose-700">{error}</p> : null}
+            ) : (
+              messages
+                .filter((message) => message.role === "user" || message.role === "assistant")
+                .map((message, index) => (
+                  <AgentMessageBubble key={index} message={message} />
+                ))
+            )}
+            {error ? <p className="text-sm text-rose-700">{error}</p> : null}
 
-          {structured &&
-          (structured.jobs?.length || structured.matches?.length || structured.applications?.length) ? (
-            <div className="space-y-2">
-              {structured.jobs?.slice(0, 6).map((job, index) => (
-                <div key={`job-${job.id ?? index}`} className="rounded-lg border border-slate-200 bg-white p-3">
-                  <p className="text-sm font-medium text-slate-800">
-                    {job.company ?? "未知企业"} · {job.title ?? "未知岗位"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {job.city ?? "城市未知"} · {job.job_type ?? "类型未知"}
-                    {job.verification_status === "verified" ? " · 已核验 JD" : " · 待核验摘要"}
-                  </p>
-                  <div className="mt-1 flex gap-3 text-xs">
-                    {job.source_url || job.official_url ? (
-                      <a
-                        href={job.source_url ?? job.official_url}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="text-sky-700 hover:underline"
-                      >
-                        官网
-                      </a>
-                    ) : null}
-                    {job.id ? (
-                      <Link href={`/jobs/${job.id}`} className="text-slate-600 hover:underline">
-                        详情
-                      </Link>
-                    ) : null}
-                    <Link href={`/discover?q=${encodeURIComponent(job.title ?? "")}`} className="text-slate-600 hover:underline">
-                      在招聘中心查看
-                    </Link>
-                  </div>
-                </div>
-              ))}
-
-              {structured.matches?.slice(0, 6).map((item, index) => (
-                <div key={`match-${item.job?.id ?? index}`} className="rounded-lg border border-slate-200 bg-white p-3">
-                  <p className="text-sm font-medium text-slate-800">
-                    {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    匹配 {item.match?.match_score != null ? `${item.match.match_score}/100` : "信息不足"} ·{" "}
-                    {item.match?.eligibility_status ?? "unknown"}
-                  </p>
-                  {item.match?.matched_skills?.length ? (
-                    <p className="mt-1 text-xs text-emerald-700">
-                      命中：{item.match.matched_skills.join("、")}
+            {structured &&
+            (structured.jobs?.length || structured.matches?.length || structured.applications?.length) ? (
+              <div className="space-y-2">
+                {structured.jobs?.slice(0, 6).map((job, index) => (
+                  <div key={`job-${job.id ?? index}`} className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-medium text-slate-800">
+                      {job.company ?? "未知企业"} · {job.title ?? "未知岗位"}
                     </p>
-                  ) : null}
-                  {item.match?.unverified_skills?.length ? (
                     <p className="mt-0.5 text-xs text-slate-500">
-                      未体现：{item.match.unverified_skills.join("、")}
+                      {job.city ?? "城市未知"} · {job.job_type ?? "类型未知"}
+                      {job.verification_status === "verified" ? " · 已核验 JD" : " · 待核验摘要"}
                     </p>
-                  ) : null}
-                  <div className="mt-1 flex gap-3 text-xs">
-                    {item.job?.id ? (
-                      <Link href={`/jobs/${item.job.id}`} className="text-sky-700 hover:underline">
-                        详情
+                    <div className="mt-1 flex gap-3 text-xs">
+                      {job.source_url || job.official_url ? (
+                        <a
+                          href={job.source_url ?? job.official_url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="text-sky-700 hover:underline"
+                        >
+                          官网
+                        </a>
+                      ) : null}
+                      {job.id ? (
+                        <Link href={`/jobs/${job.id}`} className="text-slate-600 hover:underline">
+                          详情
+                        </Link>
+                      ) : null}
+                      <Link href={`/discover?q=${encodeURIComponent(job.title ?? "")}`} className="text-slate-600 hover:underline">
+                        在招聘中心查看
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+
+                {structured.matches?.slice(0, 6).map((item, index) => (
+                  <div key={`match-${item.job?.id ?? index}`} className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-medium text-slate-800">
+                      {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      匹配 {item.match?.match_score != null ? `${item.match.match_score}/100` : "信息不足"} ·{" "}
+                      {item.match?.eligibility_status ?? "unknown"}
+                    </p>
+                    {item.match?.matched_skills?.length ? (
+                      <p className="mt-1 text-xs text-emerald-700">
+                        命中：{item.match.matched_skills.join("、")}
+                      </p>
+                    ) : null}
+                    {item.match?.unverified_skills?.length ? (
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        未体现：{item.match.unverified_skills.join("、")}
+                      </p>
+                    ) : null}
+                    <div className="mt-1 flex gap-3 text-xs">
+                      {item.job?.id ? (
+                        <Link href={`/jobs/${item.job.id}`} className="text-sky-700 hover:underline">
+                          详情
+                        </Link>
+                      ) : null}
+                      {item.job?.source_url ? (
+                        <a href={item.job.source_url} target="_blank" rel="noreferrer noopener" className="text-slate-600 hover:underline">
+                          官网
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+
+                {structured.applications?.slice(0, 6).map((app, index) => (
+                  <div key={`app-${app.id ?? index}`} className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-medium text-slate-800">
+                      {app.company ?? "未知企业"} · {app.title ?? "未知岗位"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">状态：{app.status ?? "unknown"}</p>
+                    {app.id ? (
+                      <Link href={`/applications/${app.id}`} className="mt-1 inline-block text-xs text-sky-700 hover:underline">
+                        查看申请详情
                       </Link>
                     ) : null}
-                    {item.job?.source_url ? (
-                      <a href={item.job.source_url} target="_blank" rel="noreferrer noopener" className="text-slate-600 hover:underline">
-                        官网
-                      </a>
-                    ) : null}
                   </div>
-                </div>
-              ))}
-
-              {structured.applications?.slice(0, 6).map((app, index) => (
-                <div key={`app-${app.id ?? index}`} className="rounded-lg border border-slate-200 bg-white p-3">
-                  <p className="text-sm font-medium text-slate-800">
-                    {app.company ?? "未知企业"} · {app.title ?? "未知岗位"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-slate-500">状态：{app.status ?? "unknown"}</p>
-                  {app.id ? (
-                    <Link href={`/applications/${app.id}`} className="mt-1 inline-block text-xs text-sky-700 hover:underline">
-                      查看申请详情
-                    </Link>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {run ? (
@@ -393,7 +648,7 @@ export default function AgentPage() {
         ) : null}
 
         <div className="border-t border-slate-200 p-3">
-          <div className="flex items-center gap-2">
+          <div className="mx-auto flex w-full max-w-2xl items-center gap-2">
             <input
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -401,14 +656,14 @@ export default function AgentPage() {
                 if (event.key === "Enter") void send();
               }}
               placeholder="输入你的求职需求..."
-              disabled={busy || !current}
-              className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500"
+              disabled={busy}
+              className="flex-1 rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 disabled:bg-slate-50"
             />
             <button
               type="button"
               onClick={() => void send()}
-              disabled={busy || !current || !input.trim()}
-              className="rounded-lg bg-slate-900 p-2 text-white disabled:opacity-40"
+              disabled={busy || !input.trim()}
+              className="rounded-xl bg-slate-900 p-2.5 text-white shadow-sm disabled:opacity-40"
             >
               <Send className="size-4" aria-hidden />
             </button>

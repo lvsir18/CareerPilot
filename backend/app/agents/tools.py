@@ -21,8 +21,10 @@ from app.services.application_service import ApplicationService
 from app.services.job_discovery_service import JobDiscoveryService
 from app.services.job_lead_service import JobLeadService
 from app.services.job_service import JobService
+from app.services.official_jobs_service import OfficialJobsService
 from app.services.profile_service import ProfileService
 from app.services.recommendation_service import RecommendationService
+from app.services.tencent_campus_service import TencentCampusService
 
 
 class SearchJobsInput(BaseModel):
@@ -33,6 +35,24 @@ class SearchJobsInput(BaseModel):
     cities: list[str] = Field(default_factory=list, description="城市，如 [北京, 上海]")
     job_types: list[str] = Field(default_factory=list, description="internship / campus")
     limit: int = Field(default=10, ge=1, le=30)
+
+
+class ImportOfficialJobsInput(BaseModel):
+    companies: list[str] = Field(
+        default_factory=lambda: ["tencent"],
+        description=(
+            "企业英文键，可选：tencent(腾讯) / bytedance(字节跳动) / "
+            "xiaohongshu(小红书) / bilibili(哔哩哔哩) / meituan(美团)"
+        ),
+    )
+    keyword: str | None = Field(
+        default=None, description="岗位关键词，如 算法、大模型、推荐；留空表示不限定"
+    )
+    project: str = Field(
+        default="日常实习",
+        description="仅腾讯生效：日常实习 / 应届实习 / 应届毕业生 / 青云计划-*",
+    )
+    limit: int = Field(default=5, ge=1, le=10, description="每家公司最多返回条数")
 
 
 class RecommendJobsInput(BaseModel):
@@ -47,6 +67,8 @@ def _lead_brief(lead: Any) -> dict[str, Any]:
     company = getattr(lead.company, "name", lead.company)
     status = lead.verification_status
     status_value = status.value if hasattr(status, "value") else str(status)
+    last_seen = getattr(lead, "last_seen_at", None)
+    published = getattr(lead, "published_date", None)
     return {
         "id": str(lead.id),
         "company": company,
@@ -54,6 +76,8 @@ def _lead_brief(lead: Any) -> dict[str, Any]:
         "summary": (lead.summary or "")[:300],
         "official_url": lead.official_url,
         "verification_status": status_value,
+        "published_date": published.isoformat() if published else None,
+        "last_seen_at": last_seen.isoformat() if last_seen else None,
     }
 
 
@@ -77,6 +101,10 @@ def build_job_tools(ctx: RuntimeContext) -> list:
             page=1,
             page_size=min(limit, 30),
         )
+        # Leads come from the shared database pool, so a repeat query (or an
+        # exhausted search budget) still returns rows without new evidence.
+        fresh_queries = outcome.search.tavily_queries - outcome.search.tavily_cached_queries
+        notice = "history_only" if outcome.leads and fresh_queries <= 0 else None
         return {
             "jobs": [
                 {
@@ -91,6 +119,7 @@ def build_job_tools(ctx: RuntimeContext) -> list:
                 for job in outcome.jobs
             ],
             "leads": [_lead_brief(lead) for lead in outcome.leads],
+            "leads_notice": notice,
             "warnings": outcome.search.warnings,
         }
 
@@ -119,9 +148,55 @@ def build_job_tools(ctx: RuntimeContext) -> list:
         leads = JobLeadService(ctx.session, ctx.settings).list_for_user(
             ctx.user_id, company=company, limit=min(limit, 30)
         )
-        return {"leads": [_lead_brief(lead) for lead in leads]}
+        return {
+            "leads": [_lead_brief(lead) for lead in leads],
+            "leads_notice": "library_only" if leads else None,
+        }
 
-    return [search_jobs, get_job_detail, get_job_leads]
+    @tool("import_official_jobs", args_schema=ImportOfficialJobsInput)
+    @_safe_tool
+    def import_official_jobs(
+        companies: list[str],
+        keyword: str | None,
+        project: str,
+        limit: int,
+    ) -> dict[str, Any]:
+        """直连企业官方招聘页检索岗位，含完整 JD、城市、招聘类型与官方网址。
+
+        这些站点是前端渲染（腾讯除外），search_jobs 抓 HTML 只能拿到空白页，
+        因此用户要「某公司的具体岗位/网址/JD」时必须先用本工具，
+        不要用 search_jobs 的链接去猜。
+        """
+        if companies == ["tencent"] and project:
+            result = TencentCampusService(ctx.session, ctx.settings).import_jobs(
+                keyword=keyword,
+                project=project,
+                limit=limit,
+            )
+            return {
+                "company": result["company"],
+                "project": result["project"],
+                "matched": result["matched"],
+                "created": result["created"],
+                "updated": result["updated"],
+                "jobs": result["jobs"],
+                "failures": result["failures"],
+            }
+        result = OfficialJobsService(ctx.session, ctx.settings).search(
+            companies=companies,
+            keyword=keyword,
+            limit=limit,
+            project=project,
+        )
+        return {
+            "keyword": result["keyword"],
+            "created": result["created"],
+            "updated": result["updated"],
+            "companies": result["companies"],
+            "jobs": result["jobs"],
+        }
+
+    return [search_jobs, get_job_detail, get_job_leads, import_official_jobs]
 
 
 def build_match_tools(ctx: RuntimeContext) -> list:
