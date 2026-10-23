@@ -1,0 +1,46 @@
+{
+  "alibaba_recruit_position_pagesearch_response": {
+    "result_code": "success",
+    "data": {
+      "total_count": 2,
+      "page_index": 1,
+      "page_size": 50,
+      "total_page": 1,
+      "records": {
+        "official_position_detail_d_t_o": [
+          {
+            "position_id": "9000000001",
+            "position_code": "GP90001",
+            "name": "大模型算法工程师（测试夹具）",
+            "position_category": "算法",
+            "department_name": "测试事业群",
+            "position_intro": {
+              "team_intro": "测试团队介绍",
+              "job_desc": "负责大模型训练与推理优化。",
+              "requirement_desc": "熟悉 Python\n熟悉 PyTorch"
+            },
+            "work_areas": {
+              "name": "杭州",
+              "full_name": "中国-浙江-杭州"
+            }
+          },
+          {
+            "position_id": "9000000002",
+            "position_code": "GP90002",
+            "name": "后端开发工程师（测试夹具）",
+            "position_category": "研发",
+            "department_name": "测试事业群",
+            "position_intro": {
+              "job_desc": "负责服务端研发。",
+              "requirement_desc": "熟悉 Go 或 Java"
+            },
+            "work_areas": {
+              "name": "北京",
+              "full_name": "中国-北京-北京"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

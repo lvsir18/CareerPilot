@@ -1,0 +1,252 @@
+"""Celery tasks: health probe, job source sync, scheduled fan-out."""
+
+from __future__ import annotations
+
+import socket
+import time
+from contextlib import suppress
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from app.core.cache import get_redis
+from app.core.config import get_settings
+from app.core.errors import AppError
+from app.db.session import session_scope
+from app.services.job_sync_service import JobSyncService
+from app.workers.celery_app import celery_app
+
+
+@celery_app.task(name="careerpilot.healthcheck")
+def healthcheck() -> dict[str, Any]:
+    """Round-trip probe proving broker + worker are wired correctly."""
+    return {
+        "status": "ok",
+        "worker": socket.gethostname(),
+        "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+
+
+@celery_app.task(
+    bind=True,
+    name="careerpilot.sync_job_source",
+    max_retries=2,
+    default_retry_delay=30,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def sync_job_source(self, run_id: str) -> dict[str, Any]:
+    """Run one queued SyncRun. Duplicate deliveries are de-duplicated by lock."""
+    settings = get_settings()
+    redis = get_redis()
+    lock_key = f"cp:sync:run:{run_id}"
+
+    try:
+        acquired = bool(redis.set(lock_key, "1", nx=True, ex=900))
+    except Exception:
+        # Cache outage must not block synchronization; DB state still guards
+        # duplicate terminal runs.
+        acquired = True
+
+    if not acquired:
+        return {"status": "skipped", "reason": "duplicate_task", "run_id": run_id}
+
+    try:
+        with session_scope() as session:
+            run = JobSyncService(session, settings).run(UUID(run_id))
+            return {
+                "status": run.status.value,
+                "run_id": str(run.id),
+                "source_id": str(run.source_id),
+                "fetched": run.fetched_count,
+                "created": run.created_count,
+                "updated": run.updated_count,
+                "unchanged": run.unchanged_count,
+                "failed": run.failed_count,
+            }
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=30 * (2**self.request.retries)) from exc
+        raise
+    finally:
+        with suppress(Exception):
+            redis.delete(lock_key)
+
+
+@celery_app.task(name="careerpilot.sync_enabled_sources")
+def sync_enabled_sources() -> dict[str, Any]:
+    """Beat fan-out: queue one run per enabled source, skipping active runs."""
+    settings = get_settings()
+    if not settings.job_sync_enabled:
+        return {"status": "disabled", "queued": 0}
+
+    queued: list[str] = []
+    with session_scope() as session:
+        service = JobSyncService(session, settings)
+        for source in service.list_sources():
+            if not source.enabled:
+                continue
+            if source.source_type == "fixture" and not settings.demo_mode:
+                continue
+            try:
+                run = service.create_run(source.id, None)
+            except AppError:
+                continue  # active run or disabled source
+            sync_job_source.delay(str(run.id))
+            queued.append(str(run.id))
+
+    return {"status": "queued", "count": len(queued), "run_ids": queued}
+
+
+@celery_app.task(
+    bind=True,
+    name="careerpilot.sync_mailbox",
+    max_retries=2,
+    default_retry_delay=60,
+    soft_time_limit=300,
+    time_limit=360,
+)
+def sync_mailbox(self, connection_id: str) -> dict[str, Any]:
+    """Sync one mailbox with a Redis lock so runs never overlap."""
+    from uuid import UUID as _UUID
+
+    from app.db.models.mailbox import MailboxConnection
+    from app.services.email_sync_service import EmailSyncService
+
+    settings = get_settings()
+    redis = get_redis()
+    lock_key = f"cp:mailbox:lock:{connection_id}"
+    if not redis.set(lock_key, "1", nx=True, ex=280):
+        return {"status": "skipped", "reason": "locked"}
+    try:
+        with session_scope() as session:
+            connection = session.get(MailboxConnection, _UUID(connection_id))
+            if connection is None or not connection.sync_enabled:
+                return {"status": "skipped", "reason": "disabled"}
+            run = EmailSyncService(session, settings).sync_connection(connection)
+            return {"status": run.status, "run_id": str(run.id)}
+    finally:
+        with suppress(Exception):
+            redis.delete(lock_key)
+
+
+@celery_app.task(name="careerpilot.sync_enabled_mailboxes")
+def sync_enabled_mailboxes() -> dict[str, Any]:
+    """Fan out one sync task per enabled mailbox connection."""
+    from sqlalchemy import select as _select
+
+    from app.db.models.mailbox import MailboxConnection
+
+    settings = get_settings()
+    if not settings.mailbox_sync_enabled:
+        return {"status": "disabled", "queued": 0}
+    queued = 0
+    with session_scope() as session:
+        rows = session.scalars(
+            _select(MailboxConnection).where(
+                MailboxConnection.sync_enabled.is_(True),
+                MailboxConnection.status.in_(["active", "expired", "error"]),
+            )
+        ).all()
+        for row in rows:
+            sync_mailbox.delay(str(row.id))
+            queued += 1
+    return {"status": "ok", "queued": queued}
+
+
+@celery_app.task(
+    bind=True,
+    name="careerpilot.run_agent_run",
+    max_retries=0,
+    soft_time_limit=240,
+    time_limit=300,
+)
+def run_agent_run(self, run_id: str) -> dict[str, Any]:
+    """Execute one durable AgentRun in the background.
+
+    Progress is written to ``agent_run_events`` through an independent
+    connection so the browser can follow it via SSE while the graph runs.
+    """
+    from uuid import UUID as _UUID
+
+    from app.agents.run_service import AgentRunService
+    from app.agents.service import AgentService
+    from app.core.errors import AppError
+    from app.db.models.agent_run import AgentRun
+    from app.db.models.user import User
+    from app.db.session import session_scope
+    from app.workers.celery_app import celery_app as _app
+
+    _ = _app
+
+    settings = get_settings()
+    run_uuid = _UUID(run_id)
+    started = time.time()
+
+    def emit(event_type: str, payload: dict[str, Any] | None = None) -> None:
+        with session_scope() as emit_session:
+            row = emit_session.get(AgentRun, run_uuid)
+            if row is None:
+                return
+            AgentRunService(emit_session).append_event(row, event_type, payload or {})
+
+    with session_scope() as session:
+        run = session.get(AgentRun, run_uuid)
+        if run is None:
+            return {"status": "missing"}
+        service = AgentRunService(session)
+        # claim() is the concurrency gate: only one worker moves queued->running.
+        if not service.claim(run):
+            return {"status": "skipped", "reason": run.status}
+        user = session.get(User, run.user_id)
+        thread_key = str(run.thread_id)
+        message = str(run.input_payload.get("message", ""))
+
+        try:
+            result = AgentService(session, settings).run(user, thread_key, message, on_event=emit)
+        except AppError as exc:
+            service.set_status(run, "failed", error_code=exc.code, error_summary=exc.message)
+            emit("run.failed", {"code": exc.code, "message": exc.message})
+            return {"status": "failed", "code": exc.code}
+        except Exception as exc:
+            service.set_status(run, "failed", error_code="AGENT_RUN_ERROR", error_summary=str(exc))
+            emit("run.failed", {"code": "AGENT_RUN_ERROR", "message": str(exc)[:200]})
+            return {"status": "failed"}
+
+        for item in (result.get("tool_results") or [])[:20]:
+            emit(
+                "tool.completed",
+                {"tool": item.get("tool"), "agent": item.get("agent")},
+            )
+
+        if service.is_cancel_requested(run_uuid):
+            service.set_status(run, "cancelled")
+            emit("run.cancelled", {})
+            return {"status": "cancelled"}
+
+        raw_status = str(result.get("status") or "")
+        if raw_status == "waiting_for_user":
+            final = "waiting_for_user"
+        elif raw_status == "partial":
+            final = "partial"
+        elif raw_status == "failed":
+            final = "failed"
+        else:
+            final = "completed"
+
+        service.set_status(
+            run,
+            final,
+            result=result,
+            error_summary=(result.get("errors") or [None])[0] if result.get("errors") else None,
+        )
+        emit(
+            {
+                "completed": "run.completed",
+                "partial": "run.partial",
+                "failed": "run.failed",
+                "waiting_for_user": "approval.required",
+            }[final],
+            {"duration_ms": int((time.time() - started) * 1000)},
+        )
+        return {"status": final}

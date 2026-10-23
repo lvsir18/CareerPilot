@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/node_modules
+**/.next
+**/coverage
+**/*.tsbuildinfo
+docs
+test-results
+playwright-report
+.DS_Store

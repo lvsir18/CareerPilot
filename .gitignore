@@ -1,0 +1,60 @@
+# Environment
+.env
+.env.*
+.env.local
+.env.*.local
+.env.bak.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# Runtime data
+var/
+uploads/
+*.sqlite3
+backups/
+
+# Tests
+test-results/
+playwright-report/
+blob-report/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Playwright/Chromium 在容器内生成的字体缓存
+backend/.cache/
+
+# Local release exports and credential files
+/dist/
+*.key
+*.pem
+
+# Temporary static-site builds (share the web toolchain)
+apps/web/.public-site-*/
+
+# Browser runtime profiles and local certificate stores
+backend/.local/
+backend/.config/
+backend/.fontconfig/
