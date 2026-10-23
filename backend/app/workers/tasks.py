@@ -169,12 +169,13 @@ def run_agent_run(self, run_id: str) -> dict[str, Any]:
     """
     from uuid import UUID as _UUID
 
-    from app.agents.run_service import AgentRunService
+    from app.agents.run_service import AgentRunCancelled, AgentRunService
     from app.agents.service import AgentService
     from app.core.errors import AppError
     from app.db.models.agent_run import AgentRun
     from app.db.models.user import User
     from app.db.session import session_scope
+    from app.services.profile_service import ProfileService
     from app.workers.celery_app import celery_app as _app
 
     _ = _app
@@ -183,45 +184,105 @@ def run_agent_run(self, run_id: str) -> dict[str, Any]:
     run_uuid = _UUID(run_id)
     started = time.time()
 
-    def emit(event_type: str, payload: dict[str, Any] | None = None) -> None:
+    def emit(
+        event_type: str, payload: dict[str, Any] | None = None, *, check_cancel: bool = True
+    ) -> None:
         with session_scope() as emit_session:
-            row = emit_session.get(AgentRun, run_uuid)
+            row = emit_session.get(AgentRun, run_uuid, populate_existing=True)
             if row is None:
                 return
+            # Cooperative cancellation: events double as graph checkpoints, so a
+            # cancel accepted mid-run actually stops the graph instead of being
+            # ignored until the final status write.
+            if check_cancel and row.cancel_requested_at is not None:
+                raise AgentRunCancelled()
             AgentRunService(emit_session).append_event(row, event_type, payload or {})
 
     with session_scope() as session:
-        run = session.get(AgentRun, run_uuid)
+        run = session.get(AgentRun, run_uuid, populate_existing=True)
         if run is None:
             return {"status": "missing"}
         service = AgentRunService(session)
+        # Polled at every tool/node boundary; sees the API's cancel write because
+        # the query refreshes the identity map.
+        cancel_check = lambda: service.is_cancel_requested(run_uuid)  # noqa: E731
         # claim() is the concurrency gate: only one worker moves queued->running.
         if not service.claim(run):
             return {"status": "skipped", "reason": run.status}
+
+        payload = run.input_payload or {}
+        resume_payload = payload.get("resume") if isinstance(payload.get("resume"), dict) else None
         user = session.get(User, run.user_id)
         thread_key = str(run.thread_id)
-        message = str(run.input_payload.get("message", ""))
+        message = str(payload.get("message", ""))
+
+        # A cancel accepted while the task sat in the queue must win over the
+        # work that was about to start.
+        if service.is_cancel_requested(run_uuid):
+            service.set_status(run, "cancelled")
+            emit("run.cancelled", {}, check_cancel=False)
+            return {"status": "cancelled"}
 
         try:
-            result = AgentService(session, settings).run(user, thread_key, message, on_event=emit)
+            if resume_payload is not None:
+                approve = bool(resume_payload.get("approve", True))
+                # Confirmation gates approval, not rejection. A rejection must
+                # reach the graph so its interrupt can finish without matching.
+                session.expire_all()
+                profile = ProfileService(session).get(user)
+                if approve and not profile.verified_by_user:
+                    service.set_status(run, "waiting_for_user")
+                    emit(
+                        "approval.required",
+                        {
+                            "reason": "profile_unconfirmed",
+                            "action": "confirm_profile",
+                            "message": "画像尚未确认，确认后才能继续匹配",
+                        },
+                        check_cancel=False,
+                    )
+                    return {"status": "waiting_for_user"}
+                result = AgentService(session, settings).resume(
+                    user,
+                    thread_key,
+                    approve,
+                    cancel_check=cancel_check,
+                )
+            else:
+                result = AgentService(session, settings).run(
+                    user, thread_key, message, on_event=emit, cancel_check=cancel_check
+                )
+        except AgentRunCancelled:
+            service.set_status(run, "cancelled")
+            emit("run.cancelled", {}, check_cancel=False)
+            return {"status": "cancelled"}
         except AppError as exc:
             service.set_status(run, "failed", error_code=exc.code, error_summary=exc.message)
-            emit("run.failed", {"code": exc.code, "message": exc.message})
+            emit("run.failed", {"code": exc.code, "message": exc.message}, check_cancel=False)
             return {"status": "failed", "code": exc.code}
         except Exception as exc:
             service.set_status(run, "failed", error_code="AGENT_RUN_ERROR", error_summary=str(exc))
-            emit("run.failed", {"code": "AGENT_RUN_ERROR", "message": str(exc)[:200]})
+            emit(
+                "run.failed",
+                {"code": "AGENT_RUN_ERROR", "message": str(exc)[:200]},
+                check_cancel=False,
+            )
             return {"status": "failed"}
 
         for item in (result.get("tool_results") or [])[:20]:
-            emit(
-                "tool.completed",
-                {"tool": item.get("tool"), "agent": item.get("agent")},
-            )
+            try:
+                emit(
+                    "tool.completed",
+                    {"tool": item.get("tool"), "agent": item.get("agent")},
+                )
+            except AgentRunCancelled:
+                service.set_status(run, "cancelled")
+                emit("run.cancelled", {}, check_cancel=False)
+                return {"status": "cancelled"}
 
         if service.is_cancel_requested(run_uuid):
             service.set_status(run, "cancelled")
-            emit("run.cancelled", {})
+            emit("run.cancelled", {}, check_cancel=False)
             return {"status": "cancelled"}
 
         raw_status = str(result.get("status") or "")
@@ -248,5 +309,6 @@ def run_agent_run(self, run_id: str) -> dict[str, Any]:
                 "waiting_for_user": "approval.required",
             }[final],
             {"duration_ms": int((time.time() - started) * 1000)},
+            check_cancel=False,
         )
         return {"status": final}

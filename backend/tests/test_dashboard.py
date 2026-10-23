@@ -120,3 +120,23 @@ def test_dashboard_is_user_scoped(app: FastAPI, settings: Settings, db_session: 
         register_user(client_b, email="dash-b@example.com")
         summary = client_b.get("/api/v1/dashboard/summary").json()["data"]
         assert summary["counts"]["applied"] == 0
+
+
+def test_calendar_ignores_status_change_when_no_time_given(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    """A status flip to ``interview`` stamps ``event_time=now``; that is not a slot."""
+    job = _job(db_session, "推荐算法实习")
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="cal-status@example.com")
+        created = client.post(
+            "/api/v1/applications", json={"job_id": str(job.id), "status": "applied"}
+        ).json()["data"]
+        client.patch(f"/api/v1/applications/{created['id']}", json={"status": "interview"})
+
+        response = client.get(
+            "/api/v1/dashboard/calendar",
+            params={"from": "2026-10-01T00:00:00+00:00", "to": "2026-12-01T00:00:00+00:00"},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["events"] == []

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -130,6 +131,12 @@ class ApplicationEvent(UUIDPrimaryKeyMixin, Base):
     )
     event_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # ``event_time`` defaults to "when the status was recorded"; only explicit
+    # appointments (assessment/interview with a user-supplied time) are calendar
+    # entries. Keeping the flag on the row avoids guessing from timestamps.
+    is_scheduled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
     )
     actor: Mapped[str] = mapped_column(String(32), default="user", nullable=False)
     # Kept for M1 compatibility; new code uses source_type.

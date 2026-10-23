@@ -167,8 +167,14 @@ async def stream_run(
     service = AgentRunService(session)
     run = service.get_for_user(run_id, user.id)
 
+    # Browsers reconnect with ``Last-Event-ID``; the explicit query parameter is
+    # what our own client uses. The header wins so a native EventSource retry
+    # resumes instead of replaying from 1.
+    cursor_raw = request.headers.get("last-event-id") or last_event_id
     try:
-        cursor = int(last_event_id) if last_event_id else 0
+        cursor = int(cursor_raw) if cursor_raw else 0
+        if cursor < 0:
+            cursor = 0
     except (TypeError, ValueError):
         cursor = 0
 

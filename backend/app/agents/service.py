@@ -76,7 +76,7 @@ class AgentService:
         self._session = session
         self._settings = settings
 
-    def _compile(self, user: User, saver, on_event=None):
+    def _compile(self, user: User, saver, on_event=None, cancel_check=None, resume_approval=None):
         model = build_chat_model(self._settings)
         if model is None:
             raise LLMNotConfiguredError(
@@ -88,14 +88,18 @@ class AgentService:
             session=self._session,
             settings=self._settings,
             on_event=on_event,
+            cancel_check=cancel_check,
+            resume_approval=resume_approval,
         )
         agents = build_specialized_agents(ctx, model)
         graph = build_supervisor(ctx, model, agents)
         return graph.compile(checkpointer=saver)
 
-    def run(self, user: User, thread_id: str, message: str, on_event=None) -> dict[str, Any]:
+    def run(
+        self, user: User, thread_id: str, message: str, on_event=None, cancel_check=None
+    ) -> dict[str, Any]:
         with checkpoint_saver(self._settings) as saver:
-            app = self._compile(user, saver, on_event=on_event)
+            app = self._compile(user, saver, on_event=on_event, cancel_check=cancel_check)
             config = {"configurable": {"thread_id": _thread_key(user.id, thread_id)}}
             result = app.invoke(
                 {"messages": [HumanMessage(content=message)]},
@@ -105,11 +109,17 @@ class AgentService:
                 return {"status": AGENT_STATUS_WAITING, "final_answer": None}
         return _summarize(result)
 
-    def resume(self, user: User, thread_id: str, approve: bool) -> dict[str, Any]:
+    def resume(
+        self, user: User, thread_id: str, approve: bool, cancel_check=None
+    ) -> dict[str, Any]:
         with checkpoint_saver(self._settings) as saver:
-            app = self._compile(user, saver)
+            app = self._compile(user, saver, cancel_check=cancel_check, resume_approval=approve)
             config = {"configurable": {"thread_id": _thread_key(user.id, thread_id)}}
             result = app.invoke(Command(resume=approve), config=config)
+            # Approving may still hit the confirmation gate again; the graph can
+            # interrupt a second time and the run has to stay waiting.
+            if "__interrupt__" in result:
+                return {"status": AGENT_STATUS_WAITING, "final_answer": None}
         return _summarize(result)
 
     def history(self, user: User, thread_id: str) -> list[dict[str, str]]:

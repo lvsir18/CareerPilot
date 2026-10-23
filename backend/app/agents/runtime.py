@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -29,6 +30,10 @@ AGENT_STATUS_FAILED = "failed"
 AGENT_STATUS_CANCELLED = "cancelled"
 
 
+class RunCancelled(Exception):
+    """Cancellation checkpoint raised inside a graph node or tool."""
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeContext:
     """Per-request trusted context. Never populated from LLM output."""
@@ -44,6 +49,19 @@ class RuntimeContext:
     # instead of parsing ToolMessage content, whose serialisation is up to the
     # model/tool node and silently varies between "{}" and "{'k': 'v'}".
     tool_results: list[dict[str, Any]] = field(default_factory=list)
+    # Polled at tool/node boundaries so a cancel accepted mid-run stops the graph
+    # instead of being noticed only after the whole run finished.
+    cancel_check: Callable[[], bool] | None = None
+    # Explicit HITL decision for this resume invocation, including when the
+    # profile was confirmed after the graph originally interrupted.
+    resume_approval: bool | None = None
+    # ToolNode may invoke several tools in parallel, but they share this
+    # context's SQLAlchemy Session (including the cancellation query).
+    tool_lock: RLock = field(default_factory=RLock, repr=False, compare=False)
+
+    def ensure_active(self) -> None:
+        if self.cancel_check is not None and self.cancel_check():
+            raise RunCancelled()
 
     def record_tool(self, tool: str, data: Any) -> None:
         try:

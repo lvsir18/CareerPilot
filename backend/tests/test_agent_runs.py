@@ -287,3 +287,140 @@ def test_finished_run_status_is_not_resurrected(db_session: Session, settings: S
 
     events = db_session.query(AgentRunEvent).filter_by(run_id=run.id).all()
     assert [e.sequence for e in events] == sorted(e.sequence for e in events)
+
+
+def _waiting_run(client, db_session: Session) -> dict:
+    thread = client.post("/api/v1/agent/threads").json()["data"]
+    run = client.post(
+        "/api/v1/agent/runs",
+        json={"thread_id": thread["id"], "request_id": "req-resume-1", "message": "帮我匹配实习"},
+    ).json()["data"]
+    stored = db_session.get(AgentRun, uuid.UUID(run["id"]))
+    assert stored is not None
+    stored.status = "waiting_for_user"
+    db_session.commit()
+    return {"thread": thread, "run": stored}
+
+
+def test_resume_requires_confirmed_profile(
+    app: FastAPI, settings: Settings, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        "app.workers.tasks.run_agent_run.delay", lambda *a, **k: dispatched.append("x")
+    )
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-resume-unconfirmed@example.com")
+        ctx = _waiting_run(client, db_session)
+        dispatched.clear()  # creating the run also dispatches once
+
+        response = client.post(
+            f"/api/v1/agent/threads/{ctx['thread']['id']}/resume", json={"approve": True}
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "PROFILE_NOT_CONFIRMED"
+        db_session.expire_all()
+        stored = db_session.get(AgentRun, ctx["run"].id)
+        assert stored is not None
+        # The run must keep waiting; the client button is not proof.
+        assert stored.status == "waiting_for_user"
+        assert dispatched == []
+        events = db_session.query(AgentRunEvent).filter(AgentRunEvent.run_id == stored.id).all()
+        assert any(event.event_type == "approval.required" for event in events)
+
+
+def test_resume_requeues_run_for_worker(
+    app: FastAPI, settings: Settings, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.db.models.user import User
+    from app.services.profile_service import ProfileService
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        "app.workers.tasks.run_agent_run.delay",
+        lambda run_id, *a, **k: dispatched.append(str(run_id)),
+    )
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-resume-ok@example.com")
+        ctx = _waiting_run(client, db_session)
+        dispatched.clear()  # creating the run also dispatches once
+        user = db_session.get(User, ctx["run"].user_id)
+        assert user is not None
+        ProfileService(db_session).confirm(user)
+        db_session.commit()
+
+        response = client.post(
+            f"/api/v1/agent/threads/{ctx['thread']['id']}/resume", json={"approve": True}
+        )
+
+        assert response.status_code == 202, response.text
+        body = response.json()["data"]
+        assert body["status"] == "queued"
+        stored = db_session.get(AgentRun, uuid.UUID(body["id"]))
+        assert stored is not None
+        db_session.refresh(stored)
+        assert stored.status == "queued"
+        assert (stored.input_payload or {}).get("resume") == {"approve": True}
+        assert dispatched == [str(stored.id)]
+
+
+def test_stream_resumes_from_last_event_id_header(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-cursor@example.com")
+        thread = client.post("/api/v1/agent/threads").json()["data"]
+        run = client.post(
+            "/api/v1/agent/runs",
+            json={"thread_id": thread["id"], "request_id": "req-cursor", "message": "找工作"},
+        ).json()["data"]
+
+        stored = db_session.get(AgentRun, uuid.UUID(run["id"]))
+        assert stored is not None
+        stored.status = "completed"
+        db_session.commit()
+
+        with client.stream(
+            "GET",
+            f"/api/v1/agent/runs/{run['id']}/stream",
+            headers={"Last-Event-ID": "1"},
+        ) as response:
+            assert response.status_code == 200
+            body = "".join(response.iter_text())
+
+        # Sequence 1 (run.queued) must not be replayed when the browser reconnects.
+        assert "id: 1\n" not in body
+        assert "event: run.final" in body
+
+
+def test_cancel_request_is_seen_after_external_update(
+    app: FastAPI, settings: Settings, db_session: Session, session_factory
+) -> None:
+    """The worker used to keep a stale snapshot and ignore cancellation."""
+    from datetime import UTC, datetime
+
+    from app.agents.run_service import AgentRunService
+
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-cancel-fresh@example.com")
+        thread = client.post("/api/v1/agent/threads").json()["data"]
+        run = client.post(
+            "/api/v1/agent/runs",
+            json={"thread_id": thread["id"], "request_id": "req-cancel", "message": "找工作"},
+        ).json()["data"]
+
+    service = AgentRunService(db_session)
+    run_id = uuid.UUID(run["id"])
+    assert service.is_cancel_requested(run_id) is False
+
+    other = session_factory()
+    try:
+        row = other.get(AgentRun, run_id)
+        assert row is not None
+        row.cancel_requested_at = datetime.now(UTC)
+        other.commit()
+    finally:
+        other.close()
+
+    assert service.is_cancel_requested(run_id) is True

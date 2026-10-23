@@ -52,6 +52,15 @@ const TERMINAL_EVENTS = [
   "run.timed_out",
 ];
 
+/** Run status implied by lifecycle events that carry no status field. */
+const STATUS_BY_EVENT: Record<string, string> = {
+  "run.queued": "queued",
+  "run.started": "running",
+  "run.resumed": "running",
+  "approval.required": "waiting_for_user",
+  "run.cancelled": "cancelled",
+};
+
 const STREAM_EVENTS = [
   "run.queued",
   "run.started",
@@ -152,11 +161,20 @@ export default function AgentPage() {
   const followRun = useCallback(
     (runId: string) => {
       detachStream();
+      // Bind this subscription to the thread generation it was created for: a
+      // stream/poll left over from a previous thread must never write into the
+      // conversation the user is looking at now.
+      const generation = loadToken.current;
+      const stale = () => loadToken.current !== generation;
       const source = new EventSource(`/api/v1/agent/runs/${runId}/stream`);
       streamRef.current = source;
       let finished = false;
 
       const handle = (eventType: string) => (event: Event) => {
+        if (stale()) {
+          detachStream();
+          return;
+        }
         let parsed: {
           sequence?: number;
           event_type?: string;
@@ -183,7 +201,10 @@ export default function AgentPage() {
                 },
               ],
         );
-        const status = parsed.status ?? (parsed.payload?.status as string | undefined);
+        const status =
+          parsed.status ??
+          (parsed.payload?.status as string | undefined) ??
+          STATUS_BY_EVENT[eventType];
         if (status) {
           setRunStatus(status);
         }
@@ -201,7 +222,7 @@ export default function AgentPage() {
           if (finished) return;
           finished = true;
           detachStream();
-          void pollRun(runId, finishRun);
+          void pollRun(runId, finishRun, stale);
         }
       };
 
@@ -213,7 +234,7 @@ export default function AgentPage() {
         if (finished) return;
         finished = true;
         detachStream();
-        void pollRun(runId, finishRun);
+        void pollRun(runId, finishRun, stale);
       };
     },
     [detachStream, finishRun],
@@ -383,6 +404,7 @@ export default function AgentPage() {
       cancelRename();
     }
     if (current?.id === thread.id) {
+      loadToken.current += 1;
       detachStream();
       setCurrent(null);
       setMessages([]);
@@ -473,22 +495,27 @@ export default function AgentPage() {
 
   async function resume() {
     if (!current) return;
+    const token = loadToken.current + 1;
+    loadToken.current = token;
     setBusy(true);
     setError(null);
-    setRunStatus("running");
+    setRunStatus("queued");
     const result = await resumeAgent(current.id, true);
+    if (loadToken.current !== token) {
+      return;
+    }
     if (!result.ok) {
+      // The server refuses to resume an unconfirmed profile; stay on the
+      // approval card instead of pretending the run continued.
       setBusy(false);
-      setRunStatus(null);
+      setRunStatus("waiting_for_user");
+      setWaitingApproval(true);
       setError(result.error.message);
       return;
     }
-    finishRun(result.data.status ?? "completed", result.data);
-    const runs = await listAgentThreadRuns(current.id, 1);
-    const latest = runs.ok ? runs.data[0] : undefined;
-    if (latest) {
-      setRun(latest);
-    }
+    setWaitingApproval(false);
+    setRun(result.data);
+    followRun(result.data.id);
   }
 
   function renderTitleEditor(thread: AgentThread, className: string) {
@@ -897,9 +924,18 @@ export default function AgentPage() {
 async function pollRun(
   runId: string,
   finish: (status: string, result: AgentRunResult | null) => void,
+  isStale: () => boolean = () => false,
 ) {
   for (let i = 0; i < 120; i += 1) {
+    // Stop polling for a thread the user already left: the old run's answer must
+    // not be written into the newly opened conversation.
+    if (isStale()) {
+      return;
+    }
     const result = await getAgentRun(runId);
+    if (isStale()) {
+      return;
+    }
     if (!result.ok) {
       finish("failed", null);
       return;

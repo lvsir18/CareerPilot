@@ -9,6 +9,7 @@ import { StatusPill } from "@/components/status-pill";
 import { getJobLead, verifyJobLead } from "@/lib/client-api";
 import type { JobLeadDetail } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { formatEvidenceKind } from "@/lib/job-display";
 import { formatLeadStatus, verificationTone } from "@/lib/job-display";
 
 export default function LeadDetailPage() {
@@ -214,7 +215,7 @@ export default function LeadDetailPage() {
               <ul className="mt-3 space-y-2 text-xs text-slate-600">
                 {detail.evidence.map((item) => (
                   <li key={item.id} className="rounded-lg bg-slate-50 p-2.5">
-                    <p className="font-medium text-slate-800">{item.evidence_kind}</p>
+                    <p className="font-medium text-slate-800">{formatEvidenceKind(item.evidence_kind)}</p>
                     <p className="mt-0.5 break-all text-slate-500">{item.source_url}</p>
                     <p className="mt-0.5 text-slate-400">{formatDateTime(item.captured_at)}</p>
                   </li>

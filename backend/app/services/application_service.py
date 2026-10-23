@@ -22,6 +22,13 @@ from app.repositories.applications import ApplicationRepository
 from app.services.job_lead_service import JobLeadService
 from app.services.job_service import JobService
 
+# Statuses that can carry a scheduled time (exam / interview slot).
+_SCHEDULED_STATUSES = {
+    ApplicationStatus.ASSESSMENT,
+    ApplicationStatus.ONLINE_ASSESSMENT,
+    ApplicationStatus.INTERVIEW,
+}
+
 
 def _canonical_url(value: str) -> str:
     parsed = urlsplit(value.strip())
@@ -214,6 +221,7 @@ class ApplicationService:
         source_reference: str | None,
         evidence_summary: str | None,
         verification_status: EventVerificationStatus,
+        is_scheduled: bool = False,
     ) -> ApplicationEvent:
         previous = application.status
         event = ApplicationEvent(
@@ -228,6 +236,7 @@ class ApplicationService:
             evidence_summary=evidence_summary,
             verification_status=verification_status.value,
             note=note,
+            is_scheduled=is_scheduled,
         )
         application.status = status
         application.last_confirmed_at = event_time
@@ -273,6 +282,9 @@ class ApplicationService:
             source_reference=source_reference,
             evidence_summary=evidence_summary,
             verification_status=verification_status,
+            # Only an explicit time on an assessment/interview event is a
+            # calendar appointment; a bare status change is not.
+            is_scheduled=event_time is not None and status in _SCHEDULED_STATUSES,
         )
         self._session.commit()
         self._session.refresh(event)

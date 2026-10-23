@@ -226,3 +226,17 @@ const EVENT_VERIFICATION_LABELS: Record<string, string> = {
 export function formatEventVerification(value: string): string {
   return EVENT_VERIFICATION_LABELS[value] ?? value;
 }
+
+const EVIDENCE_KIND_LABELS: Record<string, string> = {
+  search_result: "搜索结果",
+  official_page: "官方页面",
+  user_paste: "用户粘贴",
+  verification_attempt: "核验记录",
+};
+
+export function formatEvidenceKind(value: string | null | undefined): string {
+  if (!value) {
+    return "未标注来源";
+  }
+  return EVIDENCE_KIND_LABELS[value] ?? value;
+}

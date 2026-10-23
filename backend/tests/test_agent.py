@@ -114,6 +114,58 @@ def test_tool_returns_structured_error_instead_of_raising(
     assert ctx.tool_results[-1]["data"]["error"] == "JOB_NOT_FOUND"
 
 
+def test_timeline_tool_returns_events(db_session: Session, settings: Settings) -> None:
+    """Regression: the tool read ``event.new_status`` and always failed empty."""
+    from datetime import UTC, datetime
+
+    from app.db.models.enums import (
+        ApplicationSourceType,
+        ApplicationStatus,
+        EventVerificationStatus,
+    )
+    from app.services.application_service import ApplicationService
+    from tests.factories import create_job
+
+    user = _user(db_session, "agent-timeline@example.com")
+    job = create_job(db_session, company="时间线科技", title="算法实习生")
+    service = ApplicationService(db_session, settings)
+    application = service.create(
+        user,
+        job_id=job.id,
+        job_lead_id=None,
+        external_company=None,
+        external_title=None,
+        external_url=None,
+        status=ApplicationStatus.APPLIED,
+        notes=None,
+        applied_at=None,
+    )
+    service.add_event(
+        user,
+        application.id,
+        status=ApplicationStatus.INTERVIEW,
+        event_time=datetime(2026, 11, 2, 2, 0, tzinfo=UTC),
+        note=None,
+        evidence_summary="电话通知面试",
+        source_type=ApplicationSourceType.MANUAL,
+        source_reference=None,
+        verification_status=EventVerificationStatus.USER_REPORTED,
+    )
+
+    ctx = RuntimeContext(user_id=user.id, user=user, session=db_session, settings=settings)
+    tool = next(t for t in build_all_tools(ctx) if t.name == "get_application_timeline")
+    result = tool.invoke({"application_id": str(application.id)})
+
+    assert "error" not in result, result
+    assert len(result["events"]) >= 2
+    interview = next(item for item in result["events"] if item["status"] == "interview")
+    assert interview["event_time"].startswith("2026-11-02")
+    assert interview["summary"] == "电话通知面试"
+    assert interview["scheduled"] is True
+    applied = next(item for item in result["events"] if item["status"] == "applied")
+    assert applied["scheduled"] is False
+
+
 def test_progress_tool_serialises_existing_applications(
     db_session: Session, settings: Settings
 ) -> None:

@@ -169,10 +169,8 @@ export default function ProfilePage() {
     set(list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
   }
 
-  async function handleSave() {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
+  /** Persist the form; returns the stored profile or null when it failed. */
+  async function persist(): Promise<Profile | null> {
     const result = await updateProfile({
       headline: headline.trim() || null,
       education: education
@@ -205,15 +203,26 @@ export default function ProfilePage() {
         graduation_year: graduationYear ? Number(graduationYear) : null,
       },
     });
-    setBusy(false);
     if (!result.ok) {
       setError(result.error.message);
-      return;
+      return null;
     }
     hydrate(result.data);
     setStatus("ready");
+    return result.data;
+  }
+
+  async function handleSave() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const saved = await persist();
+    setBusy(false);
+    if (!saved) {
+      return;
+    }
     setNotice(
-      result.data.verified_by_user
+      saved.verified_by_user
         ? "画像已更新。"
         : "画像已更新，内容有变化，需要重新确认后才能用于岗位匹配。",
     );
@@ -223,6 +232,13 @@ export default function ProfilePage() {
     setBusy(true);
     setError(null);
     setNotice(null);
+    // Confirming without saving would drop the edits the user just typed, so the
+    // draft is written first and only a stored profile is confirmed.
+    const saved = await persist();
+    if (!saved) {
+      setBusy(false);
+      return;
+    }
     const result = await confirmProfile();
     setBusy(false);
     if (!result.ok) {
@@ -231,7 +247,7 @@ export default function ProfilePage() {
     }
     hydrate(result.data);
     setStatus("ready");
-    setNotice("画像已确认，可以查看岗位推荐了。");
+    setNotice("画像已保存并确认，可以查看岗位推荐了。");
   }
 
   if (status === "loading") {

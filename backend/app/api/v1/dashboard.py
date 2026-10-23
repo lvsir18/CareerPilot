@@ -213,8 +213,10 @@ def dashboard_calendar(
                 ApplicationEvent.event_time.is_not(None),
                 ApplicationEvent.event_time >= start,
                 ApplicationEvent.event_time <= end,
-                # A status change is not an appointment: only scheduled assessments
-                # and interviews may reach the calendar.
+                # A status change is not an appointment: ``event_time`` defaults
+                # to "now" when someone flips a status, so only events flagged as
+                # explicitly scheduled may reach the calendar.
+                ApplicationEvent.is_scheduled.is_(True),
                 ApplicationEvent.to_status.in_(_CALENDAR_STATUSES),
             )
             .order_by(ApplicationEvent.event_time.asc(), ApplicationEvent.created_at.asc())

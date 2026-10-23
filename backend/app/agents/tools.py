@@ -15,7 +15,7 @@ from uuid import UUID
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from app.agents.runtime import RuntimeContext
+from app.agents.runtime import RunCancelled, RuntimeContext
 from app.core.errors import AppError
 from app.schemas.applications import application_staleness
 from app.services.application_service import ApplicationService
@@ -333,8 +333,11 @@ def build_progress_tools(ctx: RuntimeContext) -> list:
         return {
             "events": [
                 {
-                    "status": event.new_status,
+                    # ``ApplicationEvent`` exposes ``to_status``; ``new_status``
+                    # never existed and made the timeline tool always fail.
+                    "status": event.to_status.value,
                     "event_time": event.event_time.isoformat() if event.event_time else None,
+                    "scheduled": bool(getattr(event, "is_scheduled", False)),
                     "source_type": event.source_type,
                     "evidence_type": event.evidence_type,
                     "summary": (event.evidence_summary or "")[:300],
@@ -372,14 +375,25 @@ def _safe_tool(ctx: RuntimeContext):
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            try:
-                result = fn(*args, **kwargs)
-            except AppError as exc:
-                result = {"error": exc.code, "message": exc.message}
-            except Exception as exc:
-                result = {"error": "TOOL_FAILED", "message": str(exc)[:300]}
-            ctx.record_tool(fn.__name__, result)
-            return result
+            # Both the pre-tool cancel query and the tool use ctx.session.
+            # Serialize the whole operation, not just the business query.
+            with ctx.tool_lock:
+                # ToolNode turns exceptions into tool messages, so cancellation
+                # returns a marker; the graph stops at its next node boundary.
+                if ctx.cancel_check is not None and ctx.cancel_check():
+                    result = {"error": "RUN_CANCELLED", "message": "用户已取消该任务"}
+                    ctx.record_tool(fn.__name__, result)
+                    return result
+                try:
+                    result = fn(*args, **kwargs)
+                except RunCancelled:
+                    raise
+                except AppError as exc:
+                    result = {"error": exc.code, "message": exc.message}
+                except Exception as exc:
+                    result = {"error": "TOOL_FAILED", "message": str(exc)[:300]}
+                ctx.record_tool(fn.__name__, result)
+                return result
 
         wrapper.__signature__ = signature
         return wrapper

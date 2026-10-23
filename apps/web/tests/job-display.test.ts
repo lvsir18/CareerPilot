@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatAgentEventType,
+  formatEvidenceKind,
   formatAgentRunStatus,
   formatApplicationSource,
   formatApplicationStatus,
@@ -82,5 +83,13 @@ describe("投递状态映射", () => {
 
   it("未知值原样展示而不是猜测", () => {
     expect(formatApplicationStatus("custom_status")).toBe("custom_status");
+  });
+});
+
+describe("证据类型与核验方式", () => {
+  it("用户粘贴的证据显示为中文", () => {
+    expect(formatEvidenceKind("user_paste")).toBe("用户粘贴");
+    expect(formatEvidenceKind("official_page")).toBe("官方页面");
+    expect(formatEvidenceKind(null)).toBe("未标注来源");
   });
 });

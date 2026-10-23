@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.agents.runtime import RunCancelled
 from app.core.errors import AppError
 from app.db.models.agent_run import AgentRun, AgentRunEvent
 
@@ -23,6 +24,10 @@ TERMINAL_STATUSES = frozenset({"completed", "partial", "failed", "cancelled", "t
 
 # States an already-finished run must never be overwritten with.
 _PROTECTED_FROM = frozenset({"queued", "running", "waiting_for_user"})
+
+
+# Re-exported so worker code has a single exception type to catch.
+AgentRunCancelled = RunCancelled
 
 
 class AgentRunService:
@@ -118,7 +123,9 @@ class AgentRunService:
         self._session.commit()
 
     def is_cancel_requested(self, run_id: UUID) -> bool:
-        run = self._session.get(AgentRun, run_id)
+        # The API writes the flag in a different transaction; the identity map
+        # would keep serving the pre-cancel snapshot for the whole worker run.
+        run = self._session.get(AgentRun, run_id, populate_existing=True)
         return run is not None and run.cancel_requested_at is not None
 
     def claim(self, run: AgentRun) -> bool:

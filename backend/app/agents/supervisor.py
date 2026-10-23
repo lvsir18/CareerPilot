@@ -60,16 +60,20 @@ class Intent(BaseModel):
     required_agents: list[str] = Field(default_factory=list)
 
 
-_AGGREGATE_SYSTEM = """你是求职 Agent 结果汇总器。基于工具返回的结构化结果生成简洁、可验证的回答。
+_AGGREGATE_SYSTEM = """你是求职 Agent 结果汇总器。第一原则：回答用户提出的问题（question）。
+不要套用岗位列表模板。
+- 先判断 intent：profile_query 只回答画像；progress_query 只回答申请进度；
+  job_search / job_match 才列岗位；combined 按问题顺序分点回答。
 - 只陈述结果中有依据的事实，不编造分数、状态或来源。
 - 完整 JD 岗位与只有摘要的 JobLead 要分开展示。
-- 若结果不足，明确说明信息不足，不要补齐虚构岗位。
+- 若结果不足，说明缺少什么，不要补齐虚构岗位。
+- 用户没有要求岗位时，不要写「没有拿到可展示的岗位结果」，也不要建议补关键词或城市。
 - 用自然中文直接回答用户，不要输出「检索结果汇总」这类标题。
 - 不要提及工具名称、查询数量、JSON 字段或内部执行告警。
 - 岗位用项目符号列出，每行形如「公司 · 岗位（城市）」；只使用结果中存在的字段。
 - 搜索结果带发布时间时按新到旧排列；不确定的信息不要写成确定的。
 - 不要自行添加时效或免责声明，系统会在需要时统一追加。
-- 检索失败或结果为空时，用一到两句话说明，并给出下一步建议（补充关键词、城市或岗位类型）。"""
+- 只有确实执行了检索且结果为空时，才用一到两句话说明，并给出下一步建议。"""
 
 # Appended verbatim when the tools report that no new outbound search happened,
 # so the freshness caveat never depends on the model following instructions.
@@ -109,37 +113,53 @@ def _understand(model: BaseChatModel):
 
 def _execute(ctx: RuntimeContext, agents: dict[str, object]):
     def node(state: CareerAgentState) -> dict[str, Any]:
+        # Node boundary is the natural cancellation point for a multi-agent run.
+        ctx.ensure_active()
         constraints = state.get("constraints", {})
         required = constraints.get("required_agents", []) or []
+
+        agent_results: dict[str, Any] = dict(state.get("agent_results", {}) or {})
 
         # Human-in-the-loop: full matching requires a confirmed profile.
         profile_summary: dict[str, Any] | None = None
         if "job_match" in required:
             profile = ProfileService(ctx.session).get(ctx.user)
-            if not profile.verified_by_user:
-                interrupt(
+            approved = ctx.resume_approval
+            while not profile.verified_by_user and approved is not False:
+                approved = interrupt(
                     {
                         "action": "confirm_profile",
                         "message": "完整岗位匹配需要已确认画像，请先前往 /profile 确认",
                     }
                 )
-            profile_summary = {
-                "skills": profile.skills,
-                "education": [
-                    {
-                        "school": e.school,
-                        "degree": e.degree,
-                        "major": e.major,
-                        "graduation_year": e.graduation_year,
-                    }
-                    for e in profile.education
-                ],
-                "preferences": profile.preferences.model_dump(),
-                "version": profile.version,
-                "confirmed": True,
-            }
+                # The node re-runs from the top on resume, so the snapshot above
+                # may predate the confirmation. Re-read it instead of trusting
+                # the client's "已确认，继续" button.
+                ctx.session.expire_all()
+                profile = ProfileService(ctx.session).get(ctx.user)
+            if approved is False:
+                required = [name for name in required if name != "job_match"]
+                agent_results["job_match"] = {
+                    "status": "declined",
+                    "message": "用户已拒绝本次岗位匹配，已跳过岗位匹配",
+                }
+            if "job_match" in required:
+                profile_summary = {
+                    "skills": profile.skills,
+                    "education": [
+                        {
+                            "school": e.school,
+                            "degree": e.degree,
+                            "major": e.major,
+                            "graduation_year": e.graduation_year,
+                        }
+                        for e in profile.education
+                    ],
+                    "preferences": profile.preferences.model_dump(),
+                    "version": profile.version,
+                    "confirmed": True,
+                }
 
-        agent_results: dict[str, Any] = dict(state.get("agent_results", {}) or {})
         tool_results: list[dict[str, Any]] = list(state.get("tool_results", []) or [])
         recorded = {_tool_key(item) for item in tool_results}
         for name in required:
@@ -231,13 +251,30 @@ def _lead_notice_needed(state: CareerAgentState) -> bool:
     return False
 
 
+def _original_question(state: CareerAgentState) -> str:
+    # Checkpointed messages accumulate across turns. The summarizer must answer
+    # the current user turn, even when tool/AI messages follow it.
+    for message in reversed(state.get("messages", []) or []):
+        if getattr(message, "type", "") == "human":
+            content = getattr(message, "content", "")
+            return content if isinstance(content, str) else str(content)
+    return ""
+
+
 def _aggregate(model: BaseChatModel):
     def node(state: CareerAgentState) -> dict[str, Any]:
         results = state.get("agent_results", {}) or {}
+        # The summarizer used to receive only tool results, so a profile question
+        # was answered as an empty job search. Pass the question and intent along.
+        payload = {
+            "question": _original_question(state),
+            "intent": state.get("intent", ""),
+            "agent_results": results,
+        }
         final = model.invoke(
             [
                 SystemMessage(_AGGREGATE_SYSTEM),
-                HumanMessage(content=json.dumps(results, ensure_ascii=False)),
+                HumanMessage(content=json.dumps(payload, ensure_ascii=False)),
             ]
         )
         answer = final.content if hasattr(final, "content") else str(final)

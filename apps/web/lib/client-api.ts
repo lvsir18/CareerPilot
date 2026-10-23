@@ -493,11 +493,12 @@ export function runAgent(
 export function resumeAgent(
   threadId: string,
   approve: boolean,
-): Promise<ApiResult<AgentRunResult>> {
-  return request<AgentRunResult>(`/api/v1/agent/threads/${threadId}/resume`, {
+): Promise<ApiResult<AgentRun>> {
+  // Resume is async: the API requeues the run and returns it, the caller follows
+  // the SSE stream instead of blocking on a synchronous graph execution.
+  return request<AgentRun>(`/api/v1/agent/threads/${threadId}/resume`, {
     method: "POST",
     body: { approve },
-    timeoutMs: 180_000,
   });
 }
 

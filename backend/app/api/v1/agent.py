@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response, status
@@ -17,6 +18,7 @@ from app.db.models.agent_thread import AgentThread
 from app.schemas.agent import (
     AgentMessageRead,
     AgentResumeRequest,
+    AgentRunRead,
     AgentRunRequest,
     AgentRunResult,
     AgentThreadRead,
@@ -24,8 +26,27 @@ from app.schemas.agent import (
 )
 from app.schemas.common import DataResponse
 from app.security.csrf import require_csrf
+from app.services.profile_service import ProfileService
+from app.workers.tasks import run_agent_run
 
 router = APIRouter(prefix="/agent", tags=["agent"], dependencies=[Depends(require_csrf)])
+
+
+def _run_read(run: AgentRun) -> AgentRunRead:
+    return AgentRunRead(
+        id=run.id,
+        thread_id=run.thread_id,
+        request_id=run.request_id,
+        status=run.status,
+        result=run.result,
+        error_code=run.error_code,
+        error_summary=run.error_summary,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        cancel_requested_at=run.cancel_requested_at,
+        attempt_count=run.attempt_count,
+    )
 
 
 def _thread_read(thread: AgentThread) -> AgentThreadRead:
@@ -177,8 +198,9 @@ def run_agent(
 
 @router.post(
     "/threads/{thread_id}/resume",
-    response_model=DataResponse[AgentRunResult],
-    summary="从 Human-in-the-Loop 中断恢复",
+    response_model=DataResponse[AgentRunRead],
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="从 Human-in-the-Loop 中断恢复（异步派发给 Worker）",
 )
 def resume_agent(
     thread_id: UUID,
@@ -186,12 +208,9 @@ def resume_agent(
     session: DbSession,
     settings: AppSettings,
     user: CurrentUser,
-) -> DataResponse[AgentRunResult]:
+) -> DataResponse[AgentRunRead]:
     _thread(session, user, thread_id)
     run_service = AgentRunService(session)
-    # The interrupted run is the one the user is being asked about; keep its row
-    # in sync so the conversation (and any open stream) shows the real outcome
-    # instead of leaving it stuck at waiting_for_user.
     waiting = next(
         (
             item
@@ -200,21 +219,48 @@ def resume_agent(
         ),
         None,
     )
-    if waiting is not None:
-        run_service.set_status(waiting, "running")
-        run_service.append_event(waiting, "run.resumed", {"approve": payload.approve})
-        session.commit()
+    if waiting is None:
+        raise AppError(
+            code="AGENT_RUN_NOT_WAITING",
+            message="当前没有等待确认的任务，请重新发送需求",
+            status_code=409,
+        )
 
-    try:
-        result = AgentService(session, settings).resume(user, str(thread_id), payload.approve)
-    except LLMNotConfiguredError as exc:
-        if waiting is not None:
-            run_service.set_status(
-                waiting, "failed", error_code="LLM_NOT_CONFIGURED", error_summary=str(exc)[:500]
+    # Confirmation is enforced here as well as in the worker: pressing the
+    # button is a request, not proof that the profile is confirmed.
+    if payload.approve:
+        try:
+            profile = ProfileService(session).get(user)
+            confirmed = profile.verified_by_user
+        except AppError:
+            confirmed = False
+        if not confirmed:
+            run_service.append_event(
+                waiting,
+                "approval.required",
+                {
+                    "reason": "profile_unconfirmed",
+                    "action": "confirm_profile",
+                    "message": "画像尚未确认，确认后才能继续匹配",
+                },
             )
-        raise AppError(code="LLM_NOT_CONFIGURED", message=str(exc), status_code=503) from exc
-    if waiting is not None:
-        status = result.get("status") or "completed"
-        run_service.append_event(waiting, "run.final", {"status": status})
-        run_service.set_status(waiting, status, result=result)
-    return DataResponse(data=AgentRunResult(thread_id=thread_id, **result))
+            session.commit()
+            raise AppError(
+                code="PROFILE_NOT_CONFIRMED",
+                message="画像尚未确认，请先在「画像」页完成确认后再继续",
+                status_code=409,
+            )
+
+    # Requeue the interrupted run and let the worker execute it: the API must not
+    # run the graph inside the request (no Celery limits, no cancel/timeout).
+    waiting.input_payload = {
+        **(waiting.input_payload or {}),
+        "resume": {"approve": payload.approve},
+    }
+    run_service.set_status(waiting, "queued")
+    run_service.append_event(waiting, "run.resumed", {"approve": payload.approve})
+    session.commit()
+    session.refresh(waiting)
+    with contextlib.suppress(Exception):
+        run_agent_run.delay(str(waiting.id))
+    return DataResponse(data=_run_read(waiting))

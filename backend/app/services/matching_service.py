@@ -243,10 +243,12 @@ def _eligibility(
         else:
             verified.append("学历满足要求")
 
-    # Hard job-type constraint.
+    # Hard job-type constraint. Values are internal enums ("internship"), so they
+    # are translated before they reach the user instead of printing a Python list.
     if profile.preferences.job_types and job.job_type not in profile.preferences.job_types:
+        preferred = "、".join(_job_type_label(item) for item in profile.preferences.job_types)
         hard_violations.append(
-            f"求职类型不满足：偏好 {profile.preferences.job_types}，岗位为 {job.job_type}"
+            f"求职类型不满足：偏好 {preferred}，岗位为 {_job_type_label(job.job_type)}"
         )
 
     if hard_violations:
@@ -254,6 +256,24 @@ def _eligibility(
     if verified:
         return ("eligible", verified)
     return ("unknown", missing)
+
+
+_JOB_TYPE_LABELS = {
+    "internship": "实习",
+    "campus": "校招",
+    "campus_recruit": "校招",
+    "full_time": "全职",
+    "part_time": "兼职",
+    "contract": "合同制",
+    "temporary": "临时",
+    "unknown": "未标注",
+}
+
+
+def _job_type_label(value: str | None) -> str:
+    if not value:
+        return "未标注"
+    return _JOB_TYPE_LABELS.get(value, value)
 
 
 def _highest_degree(profile: ProfileRead) -> str | None:
