@@ -171,7 +171,7 @@ def event_to_read(event: ApplicationEvent) -> ApplicationEventRead:
     )
 
 
-def _stale_info(row: Application) -> tuple[bool, int | None]:
+def application_staleness(row: Application) -> tuple[bool, int | None]:
     if row.status not in ACTIVE_STATUSES:
         return False, None
     marker = row.last_confirmed_at or row.updated_at
@@ -181,7 +181,7 @@ def _stale_info(row: Application) -> tuple[bool, int | None]:
 
 
 def application_to_read(row: Application) -> ApplicationRead:
-    stale, stale_days = _stale_info(row)
+    stale, stale_days = application_staleness(row)
     events = list(row.events)
     latest = events[-1] if events else None
     return ApplicationRead(

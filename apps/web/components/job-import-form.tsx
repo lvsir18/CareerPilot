@@ -96,7 +96,8 @@ export function JobImportForm() {
         setError(leadResult.error.message);
         return;
       }
-      router.push("/discover");
+      // Land on the saved record instead of a blank discovery page.
+      router.push(`/leads/${leadResult.data.id}`);
       router.refresh();
       return;
     }

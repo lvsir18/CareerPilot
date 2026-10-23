@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
 
 from app.agents.llm import LLMNotConfiguredError
+from app.agents.run_service import AgentRunService
 from app.agents.service import AgentService
 from app.auth.dependencies import AppSettings, CurrentUser, DbSession
 from app.core.errors import AppError
@@ -187,8 +188,33 @@ def resume_agent(
     user: CurrentUser,
 ) -> DataResponse[AgentRunResult]:
     _thread(session, user, thread_id)
+    run_service = AgentRunService(session)
+    # The interrupted run is the one the user is being asked about; keep its row
+    # in sync so the conversation (and any open stream) shows the real outcome
+    # instead of leaving it stuck at waiting_for_user.
+    waiting = next(
+        (
+            item
+            for item in run_service.list_for_thread(thread_id, user.id)
+            if item.status == "waiting_for_user"
+        ),
+        None,
+    )
+    if waiting is not None:
+        run_service.set_status(waiting, "running")
+        run_service.append_event(waiting, "run.resumed", {"approve": payload.approve})
+        session.commit()
+
     try:
         result = AgentService(session, settings).resume(user, str(thread_id), payload.approve)
     except LLMNotConfiguredError as exc:
+        if waiting is not None:
+            run_service.set_status(
+                waiting, "failed", error_code="LLM_NOT_CONFIGURED", error_summary=str(exc)[:500]
+            )
         raise AppError(code="LLM_NOT_CONFIGURED", message=str(exc), status_code=503) from exc
+    if waiting is not None:
+        status = result.get("status") or "completed"
+        run_service.append_event(waiting, "run.final", {"status": status})
+        run_service.set_status(waiting, status, result=result)
     return DataResponse(data=AgentRunResult(thread_id=thread_id, **result))

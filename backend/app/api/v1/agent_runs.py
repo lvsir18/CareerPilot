@@ -87,6 +87,22 @@ def create_run(
     return DataResponse(data=_read(run))
 
 
+@router.get(
+    "/agent/threads/{thread_id}/runs",
+    response_model=DataResponse[list[AgentRunRead]],
+    summary="读取会话最近的任务（用于刷新/切换会话后恢复状态）",
+)
+def list_thread_runs(
+    thread_id: UUID,
+    session: DbSession,
+    user: CurrentUser,
+    limit: int = Query(default=5, ge=1, le=50),
+) -> DataResponse[list[AgentRunRead]]:
+    _thread(session, user, thread_id)
+    runs = AgentRunService(session).list_for_thread(thread_id, user.id)[:limit]
+    return DataResponse(data=[_read(run) for run in runs])
+
+
 @router.get("/agent/runs/{run_id}", response_model=DataResponse[AgentRunRead])
 def get_run(
     run_id: UUID,
@@ -176,7 +192,10 @@ async def stream_run(
                     f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 )
 
-            current = session.get(type(run), run_id)
+            # The worker commits in another transaction; the identity map would
+            # otherwise keep returning this request's stale snapshot and the
+            # stream would never emit run.final.
+            current = session.get(type(run), run_id, populate_existing=True)
             if current is not None and current.status in {
                 "completed",
                 "partial",

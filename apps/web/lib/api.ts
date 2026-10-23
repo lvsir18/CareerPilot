@@ -132,6 +132,11 @@ export interface JobLead {
   url_type: string;
 }
 
+export interface JobLeadDetail {
+  lead: JobLead;
+  evidence: SourceEvidence[];
+}
+
 export interface SearchProviderResult {
   title: string;
   url: string;
@@ -337,6 +342,16 @@ export interface Profile {
   updated_at: string | null;
 }
 
+export interface ProfileUpdatePayload {
+  headline?: string | null;
+  education?: EducationItem[];
+  skills?: string[];
+  experiences?: ExperienceItem[];
+  projects?: { title: string; summary: string | null }[];
+  preferences?: Partial<JobPreferences>;
+  verified_by_user?: boolean;
+}
+
 export interface ResumeParsed {
   name: string | null;
   email: string | null;
@@ -405,6 +420,24 @@ export interface DashboardCounts {
   interview: number;
   offer: number;
   needs_review: number;
+}
+
+export interface DashboardCalendarEvent {
+  id: string;
+  application_id: string;
+  company: string;
+  title: string;
+  status: string;
+  starts_at: string;
+  source_type: string;
+  verification_status: string;
+}
+
+export interface DashboardCalendar {
+  events: DashboardCalendarEvent[];
+  range_start: string;
+  range_end: string;
+  generated_at: string;
 }
 
 export interface DashboardSummary {

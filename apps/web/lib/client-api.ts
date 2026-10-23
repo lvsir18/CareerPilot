@@ -16,6 +16,7 @@ import {
   type ApplicationDetail,
   type ApplicationImportPreview,
   type ApplicationRecord,
+  type DashboardCalendar,
   type DashboardSummary,
   type DiscoveryResponse,
   type JobDetail,
@@ -23,9 +24,11 @@ import {
   type GmailAuthorize,
   type MailboxDeleteResult,
   type JobLead,
+  type JobLeadDetail,
   type MailboxConnection,
   type MailboxSyncRun,
   type Profile,
+  type ProfileUpdatePayload,
   type RecruitmentCandidate,
   type RecommendationItem,
   type Resume,
@@ -336,6 +339,10 @@ export function verifyJobLead(leadId: string): Promise<ApiResult<unknown>> {
   return request(`/api/v1/job-leads/${leadId}/verify`, { method: "POST" });
 }
 
+export function getJobLead(leadId: string): Promise<ApiResult<JobLeadDetail>> {
+  return request<JobLeadDetail>(`/api/v1/job-leads/${leadId}`);
+}
+
 async function uploadRequest<T>(
   path: string,
   formData: FormData,
@@ -408,7 +415,7 @@ export function getProfile(): Promise<ApiResult<Profile>> {
   return request<Profile>("/api/v1/profile/me");
 }
 
-export function updateProfile(payload: unknown): Promise<ApiResult<Profile>> {
+export function updateProfile(payload: ProfileUpdatePayload): Promise<ApiResult<Profile>> {
   return request<Profile>("/api/v1/profile/me", { method: "PATCH", body: payload });
 }
 
@@ -464,6 +471,13 @@ export function listAgentMessages(threadId: string): Promise<ApiResult<AgentMess
   return request<AgentMessage[]>(`/api/v1/agent/threads/${threadId}/messages`);
 }
 
+export function listAgentThreadRuns(
+  threadId: string,
+  limit = 5,
+): Promise<ApiResult<AgentRun[]>> {
+  return request<AgentRun[]>(`/api/v1/agent/threads/${threadId}/runs?limit=${limit}`);
+}
+
 export function runAgent(
   threadId: string,
   message: string,
@@ -489,6 +503,17 @@ export function resumeAgent(
 
 export function getDashboardSummary(): Promise<ApiResult<DashboardSummary>> {
   return request<DashboardSummary>("/api/v1/dashboard/summary");
+}
+
+export function getCalendarEvents(
+  start?: string,
+  end?: string,
+): Promise<ApiResult<DashboardCalendar>> {
+  const params = new URLSearchParams();
+  if (start) params.set("from", start);
+  if (end) params.set("to", end);
+  const query = params.toString();
+  return request<DashboardCalendar>(`/api/v1/dashboard/calendar${query ? `?${query}` : ""}`);
 }
 
 export function listMailboxes(): Promise<ApiResult<MailboxConnection[]>> {

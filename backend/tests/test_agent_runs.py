@@ -83,6 +83,53 @@ def test_same_request_id_different_payload_conflicts(app: FastAPI, settings: Set
         assert conflict.json()["error"]["code"] == "AGENT_REQUEST_CONFLICT"
 
 
+def test_same_request_id_different_thread_conflicts(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-thread-conflict@example.com")
+        thread_a = client.post("/api/v1/agent/threads").json()["data"]
+        thread_b = client.post("/api/v1/agent/threads").json()["data"]
+        first = client.post(
+            "/api/v1/agent/runs",
+            json={"thread_id": thread_a["id"], "request_id": REQUEST_A, "message": "同一句话"},
+        )
+        assert first.status_code == 202, first.text
+
+        replay = client.post(
+            "/api/v1/agent/runs",
+            json={"thread_id": thread_b["id"], "request_id": REQUEST_A, "message": "同一句话"},
+        )
+        assert replay.status_code == 409
+        assert replay.json()["error"]["code"] == "AGENT_REQUEST_CONFLICT"
+        assert db_session.query(AgentRun).count() == 1
+
+
+def test_thread_runs_are_listed_newest_first(app: FastAPI, settings: Settings) -> None:
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-thread-list@example.com")
+        thread = client.post("/api/v1/agent/threads").json()["data"]
+        for index, request_id in enumerate(["req-list-1", "req-list-2"]):
+            created = client.post(
+                "/api/v1/agent/runs",
+                json={
+                    "thread_id": thread["id"],
+                    "request_id": request_id,
+                    "message": f"第 {index} 次请求",
+                },
+            )
+            assert created.status_code == 202
+
+        listed = client.get(f"/api/v1/agent/threads/{thread['id']}/runs")
+        assert listed.status_code == 200
+        runs = listed.json()["data"]
+        assert len(runs) == 2
+        assert runs[0]["request_id"] == "req-list-2"
+        assert runs[0]["thread_id"] == thread["id"]
+        for run in runs:
+            assert "result" in run and "status" in run
+
+
 def test_request_id_is_scoped_per_user(app: FastAPI, settings: Settings) -> None:
     with AutoCsrfTestClient(app, settings) as client_a:
         register_user(client_a, email="run-a@example.com")
@@ -140,6 +187,35 @@ def test_events_are_ordered_and_replayable(
             "data"
         ]
         assert replay == []
+
+
+def test_stream_emits_final_event_for_finished_run(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-stream@example.com")
+        thread = client.post("/api/v1/agent/threads").json()["data"]
+        run = client.post(
+            "/api/v1/agent/runs",
+            json={
+                "thread_id": thread["id"],
+                "request_id": "req-stream-1",
+                "message": "帮我找实习",
+            },
+        ).json()["data"]
+
+        stored = db_session.get(AgentRun, uuid.UUID(run["id"]))
+        assert stored is not None
+        stored.status = "completed"
+        stored.result = {"summary": "done", "structured": {"jobs": []}}
+        db_session.commit()
+
+        with client.stream("GET", f"/api/v1/agent/runs/{run['id']}/stream") as response:
+            assert response.status_code == 200
+            body = "".join(response.iter_text())
+
+        assert "event: run.final" in body
+        assert '"status": "completed"' in body
 
 
 def test_cancel_and_cross_user_access(app: FastAPI, settings: Settings) -> None:

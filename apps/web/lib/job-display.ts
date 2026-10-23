@@ -12,12 +12,19 @@ const JOB_TYPE_LABELS: Record<string, string> = {
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   fixture: "演示数据源",
   manual: "人工录入",
+  manual_import: "私有 JD 导入",
   greenhouse_public: "Greenhouse",
   lever_public: "Lever",
   ashby_public: "Ashby",
   approved_company_site: "企业官网",
   baidu_public: "百度招聘官网",
   tavily_extract: "Tavily 官方详情提取",
+  tencent_campus: "腾讯校招官网",
+  tencent_campus_rendered: "腾讯校招官网",
+  bytedance_campus_rendered: "字节跳动校招官网",
+  xiaohongshu_campus_rendered: "小红书校招官网",
+  bilibili_campus_rendered: "哔哩哔哩校招官网",
+  meituan_campus_rendered: "美团校招官网",
 };
 
 export function formatSourceType(value: string): string {
@@ -152,6 +159,60 @@ export function formatApplicationSource(value: string | null | undefined): strin
     return "未知来源";
   }
   return APPLICATION_SOURCE_LABELS[value] ?? value;
+}
+
+const AGENT_RUN_STATUS_LABELS: Record<string, string> = {
+  queued: "排队中",
+  running: "执行中",
+  waiting_for_user: "等待你确认",
+  completed: "已完成",
+  partial: "部分完成（有步骤失败）",
+  failed: "执行失败",
+  cancelled: "已取消",
+  timed_out: "已超时",
+};
+
+export function formatAgentRunStatus(value: string | null | undefined): string {
+  if (!value) {
+    return "未开始";
+  }
+  return AGENT_RUN_STATUS_LABELS[value] ?? value;
+}
+
+const AGENT_EVENT_LABELS: Record<string, string> = {
+  "run.queued": "任务已排队",
+  "run.started": "开始执行",
+  "run.resumed": "继续执行",
+  "plan.created": "已生成计划",
+  "agent.started": "子任务开始",
+  "agent.completed": "子任务完成",
+  "tool.started": "调用工具",
+  "tool.completed": "工具返回",
+  "approval.required": "需要你确认",
+  "run.completed": "执行完成",
+  "run.partial": "部分完成",
+  "run.failed": "执行失败",
+  "run.cancelled": "已取消",
+  "run.final": "结果已生成",
+};
+
+export function formatAgentEventType(value: string): string {
+  return AGENT_EVENT_LABELS[value] ?? value;
+}
+
+const ELIGIBILITY_LABELS: Record<string, string> = {
+  eligible: "符合资格",
+  likely_eligible: "较可能符合",
+  unclear: "信息不足",
+  ineligible: "不符合资格",
+  unknown: "未判断",
+};
+
+export function formatEligibility(value: string | null | undefined): string {
+  if (!value) {
+    return "未判断";
+  }
+  return ELIGIBILITY_LABELS[value] ?? value;
 }
 
 const EVENT_VERIFICATION_LABELS: Record<string, string> = {

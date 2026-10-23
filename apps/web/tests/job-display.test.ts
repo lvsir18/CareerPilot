@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatAgentEventType,
+  formatAgentRunStatus,
+  formatApplicationSource,
   formatApplicationStatus,
+  formatEligibility,
   formatJobStatus,
   formatJobType,
   formatLeadStatus,
@@ -46,6 +50,25 @@ describe("岗位展示映射", () => {
     expect(verificationTone("search_snippet_only")).toBe("warning");
     expect(verificationTone("user_provided")).toBe("info");
     expect(verificationTone("verified_official")).toBe("ok");
+  });
+});
+
+describe("内部枚举不直接外露", () => {
+  it("资格判断使用中文文案", () => {
+    expect(formatEligibility("eligible")).toBe("符合资格");
+    expect(formatEligibility("ineligible")).toBe("不符合资格");
+    expect(formatEligibility(null)).toBe("未判断");
+  });
+
+  it("进度来源与 Agent 状态使用中文文案", () => {
+    expect(formatApplicationSource("email_import")).toBe("邮件导入");
+    expect(formatAgentRunStatus("partial")).toContain("部分完成");
+    expect(formatAgentEventType("run.final")).toBe("结果已生成");
+  });
+
+  it("私有导入与最新官方来源可读", () => {
+    expect(formatSourceType("manual_import")).toBe("私有 JD 导入");
+    expect(formatSourceType("bytedance_campus_rendered")).toBe("字节跳动校招官网");
   });
 });
 

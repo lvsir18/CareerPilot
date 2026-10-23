@@ -54,6 +54,62 @@ def test_dashboard_counts_reflect_user_data(
         assert summary["latest_jobs"]
 
 
+def test_calendar_lists_only_explicit_appointments(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    job = _job(db_session, "大模型算法实习生")
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="cal@example.com")
+        created = client.post(
+            "/api/v1/applications", json={"job_id": str(job.id), "status": "applied"}
+        ).json()["data"]
+        # A status change with a timestamp is still not an appointment.
+        client.post(
+            f"/api/v1/applications/{created['id']}/events",
+            json={"status": "applied", "event_time": "2026-10-26T01:00:00+00:00"},
+        )
+        client.post(
+            f"/api/v1/applications/{created['id']}/events",
+            json={"status": "interview", "event_time": "2026-10-28T02:00:00+00:00"},
+        )
+        client.post(
+            f"/api/v1/applications/{created['id']}/events",
+            json={"status": "interview", "event_time": "2027-03-01T02:00:00+00:00"},
+        )
+
+        response = client.get(
+            "/api/v1/dashboard/calendar",
+            params={"from": "2026-10-01T00:00:00+00:00", "to": "2026-11-01T00:00:00+00:00"},
+        )
+        assert response.status_code == 200
+        events = response.json()["data"]["events"]
+        assert [event["status"] for event in events] == ["interview"]
+        assert events[0]["starts_at"].startswith("2026-10-28")
+        assert events[0]["company"] == "测试科技"
+
+
+def test_calendar_is_user_scoped(app: FastAPI, settings: Settings, db_session: Session) -> None:
+    job = _job(db_session, "数据开发实习")
+    with AutoCsrfTestClient(app, settings) as client_a:
+        register_user(client_a, email="cal-a@example.com")
+        created = client_a.post(
+            "/api/v1/applications", json={"job_id": str(job.id), "status": "applied"}
+        ).json()["data"]
+        client_a.post(
+            f"/api/v1/applications/{created['id']}/events",
+            json={"status": "interview", "event_time": "2026-10-29T02:00:00+00:00"},
+        )
+
+        client_b = AutoCsrfTestClient(app, settings)
+        register_user(client_b, email="cal-b@example.com")
+        response = client_b.get(
+            "/api/v1/dashboard/calendar",
+            params={"from": "2026-10-01T00:00:00+00:00", "to": "2026-11-01T00:00:00+00:00"},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["events"] == []
+
+
 def test_dashboard_is_user_scoped(app: FastAPI, settings: Settings, db_session: Session) -> None:
     job = _job(db_session, "后端开发实习")
     with AutoCsrfTestClient(app, settings) as client_a:

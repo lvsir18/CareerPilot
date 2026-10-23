@@ -43,12 +43,7 @@ class AgentRunService:
             select(AgentRun).where(AgentRun.user_id == user_id, AgentRun.request_id == request_id)
         )
         if existing is not None:
-            if existing.input_payload.get("message") != message:
-                raise AppError(
-                    code="AGENT_REQUEST_CONFLICT",
-                    message="同一 request_id 已用于不同的请求内容",
-                    status_code=409,
-                )
+            self._assert_same_request(existing, thread_id=thread_id, message=message)
             return existing, False
 
         run = AgentRun(
@@ -70,6 +65,7 @@ class AgentRunService:
                 )
             )
             if concurrent is not None:
+                self._assert_same_request(concurrent, thread_id=thread_id, message=message)
                 return concurrent, False
             raise AppError(
                 code="AGENT_RUN_CREATE_FAILED", message="创建任务失败", status_code=500
@@ -78,6 +74,16 @@ class AgentRunService:
         self._session.commit()
         self._session.refresh(run)
         return run, True
+
+    @staticmethod
+    def _assert_same_request(existing: AgentRun, *, thread_id: UUID, message: str) -> None:
+        """A replayed request_id must match both the thread and the message."""
+        if existing.input_payload.get("message") != message or existing.thread_id != thread_id:
+            raise AppError(
+                code="AGENT_REQUEST_CONFLICT",
+                message="同一 request_id 已用于不同的请求内容或会话",
+                status_code=409,
+            )
 
     # ----------------------------------------------------------------- state
     def set_status(

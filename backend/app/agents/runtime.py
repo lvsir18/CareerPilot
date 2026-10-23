@@ -6,8 +6,9 @@ from LLM-generated tool arguments.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -39,6 +40,18 @@ class RuntimeContext:
     # Optional sink for execution progress events (SSE replay). Never set
     # from model output.
     on_event: Callable[..., None] | None = None
+    # Every tool call records its result here. Structured result cards read this
+    # instead of parsing ToolMessage content, whose serialisation is up to the
+    # model/tool node and silently varies between "{}" and "{'k': 'v'}".
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
+
+    def record_tool(self, tool: str, data: Any) -> None:
+        try:
+            # Snapshot: later mutation by the caller must not rewrite history.
+            snapshot = json.loads(json.dumps(data, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            snapshot = {"error": "TOOL_OUTPUT_UNSERIALIZABLE", "message": str(data)[:300]}
+        self.tool_results.append({"tool": tool, "data": snapshot})
 
     def model_dump_scoped(self) -> dict[str, Any]:
         return {

@@ -5,6 +5,7 @@ import { ArrowUpRight, Star } from "lucide-react";
 import { StatusPill } from "@/components/status-pill";
 import { fetchSavedJobs } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { formatJobType, formatVerificationStatus, verificationTone } from "@/lib/job-display";
 
 export const dynamic = "force-dynamic";
 
@@ -39,13 +40,13 @@ export default async function SavedJobsPage() {
                     {item.job.company} · {item.job.title}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    {item.job.city ?? "城市未知"} · {item.job.job_type ?? "类型未知"} · 收藏于{" "}
+                    {item.job.city ?? "城市未知"} · {formatJobType(item.job.job_type)} · 收藏于{" "}
                     {formatDateTime(item.created_at)}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <StatusPill tone={item.job.verification_status === "verified" ? "ok" : "warning"}>
-                    {item.job.verification_status === "verified" ? "已核验 JD" : "待核验"}
+                  <StatusPill tone={verificationTone(item.job.verification_status)}>
+                    {formatVerificationStatus(item.job.verification_status)}
                   </StatusPill>
                   <a
                     href={item.job.source_url}

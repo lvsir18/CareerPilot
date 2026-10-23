@@ -108,3 +108,42 @@ def test_tool_returns_structured_error_instead_of_raising(
     assert isinstance(result, dict)
     assert result["error"] == "JOB_NOT_FOUND"
     assert result["message"]
+    # Failures are recorded too, so the run is reported as partial instead of
+    # silently "completed".
+    assert ctx.tool_results[-1]["tool"] == "get_job_detail"
+    assert ctx.tool_results[-1]["data"]["error"] == "JOB_NOT_FOUND"
+
+
+def test_progress_tool_serialises_existing_applications(
+    db_session: Session, settings: Settings
+) -> None:
+    """Regression: the tool read ``app.needs_review`` off the ORM row and died."""
+    from app.db.models.enums import ApplicationStatus
+    from app.services.application_service import ApplicationService
+    from tests.factories import create_job
+
+    user = _user(db_session, "agent-progress@example.com")
+    job = create_job(db_session, company="测试科技", title="后端开发实习生")
+    ApplicationService(db_session, settings).create(
+        user,
+        job_id=job.id,
+        job_lead_id=None,
+        external_company=None,
+        external_title=None,
+        external_url=None,
+        status=ApplicationStatus.APPLIED,
+        notes=None,
+        applied_at=None,
+    )
+
+    ctx = RuntimeContext(user_id=user.id, user=user, session=db_session, settings=settings)
+    tool = next(t for t in build_all_tools(ctx) if t.name == "list_applications")
+    result = tool.invoke({})
+
+    assert "error" not in result, result
+    assert result["total"] == 1
+    row = result["applications"][0]
+    assert row["company"] == "测试科技"
+    assert row["status"] == "applied"
+    assert row["needs_review"] is False
+    assert row["stale_days"] == 0

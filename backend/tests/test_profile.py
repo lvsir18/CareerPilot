@@ -52,6 +52,21 @@ def test_profile_update_normalizes_and_versions(client: TestClient) -> None:
     assert second.status_code == 200
     assert second.json()["data"]["version"] == 2
     assert second.json()["data"]["skills"] == ["Python", "LLM"]
+    # Editing confirmed content invalidates the confirmation.
+    assert second.json()["data"]["verified_by_user"] is False
+
+
+def test_confirmation_survives_noop_patch(client: TestClient) -> None:
+    register_user(client)
+    client.patch(
+        "/api/v1/profile/me",
+        json={"headline": "算法实习", "verified_by_user": True},
+    )
+
+    same = client.patch("/api/v1/profile/me", json={"headline": "算法实习"})
+
+    assert same.status_code == 200
+    assert same.json()["data"]["verified_by_user"] is True
 
 
 def test_empty_patch_is_rejected(client: TestClient) -> None:

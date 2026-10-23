@@ -32,8 +32,8 @@ export default async function LoginPage() {
             投递进度由你掌控。
           </h2>
           <p className="mt-4 max-w-md text-sm leading-relaxed text-slate-400">
-            当前为 M1：已完成账号体系、岗位库与手动投递记录。简历画像、可解释匹配与多
-            Agent 工作流将按里程碑逐步交付。
+            从岗位发现到申请跟进，一个工作台完成：官方站点检索、简历解析画像、可解释匹配、
+            申请进度登记，以及会调用真实数据的求职助手。
           </p>
 
           <ul className="mt-8 space-y-4 text-sm">
@@ -47,11 +47,11 @@ export default async function LoginPage() {
             </li>
             <li className="flex items-start gap-3">
               <Bot className="mt-0.5 size-4 shrink-0 text-sky-400" aria-hidden />
-              不自动投递、不抓取受限信息，Agent 能力后续交付
+              助手只调用真实岗位、画像与进度数据；不自动投递、不抓取受限信息
             </li>
           </ul>
 
-          <p className="mt-10 font-mono text-xs text-slate-600">CareerPilot · v0.1.0 · M1</p>
+          <p className="mt-10 font-mono text-xs text-slate-600">CareerPilot · v0.1.0</p>
         </section>
 
         <div className="flex justify-center">

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.agents.runtime import RuntimeContext
 from app.core.errors import AppError
+from app.schemas.applications import application_staleness
 from app.services.application_service import ApplicationService
 from app.services.job_discovery_service import JobDiscoveryService
 from app.services.job_lead_service import JobLeadService
@@ -83,7 +84,7 @@ def _lead_brief(lead: Any) -> dict[str, Any]:
 
 def build_job_tools(ctx: RuntimeContext) -> list:
     @tool("search_jobs", args_schema=SearchJobsInput)
-    @_safe_tool
+    @_safe_tool(ctx)
     def search_jobs(
         keywords: list[str],
         companies: list[str],
@@ -124,7 +125,7 @@ def build_job_tools(ctx: RuntimeContext) -> list:
         }
 
     @tool("get_job_detail")
-    @_safe_tool
+    @_safe_tool(ctx)
     def get_job_detail(job_id: str) -> dict[str, Any]:
         """读取已核验岗位的完整 JD 详情。"""
         job = JobService(ctx.session, ctx.settings).get_job(UUID(job_id))
@@ -142,7 +143,7 @@ def build_job_tools(ctx: RuntimeContext) -> list:
         }
 
     @tool("get_job_leads")
-    @_safe_tool
+    @_safe_tool(ctx)
     def get_job_leads(company: str | None = None, limit: int = 10) -> dict[str, Any]:
         """列出搜索候选 JobLead（只有摘要，不含完整 JD）。"""
         leads = JobLeadService(ctx.session, ctx.settings).list_for_user(
@@ -154,7 +155,7 @@ def build_job_tools(ctx: RuntimeContext) -> list:
         }
 
     @tool("import_official_jobs", args_schema=ImportOfficialJobsInput)
-    @_safe_tool
+    @_safe_tool(ctx)
     def import_official_jobs(
         companies: list[str],
         keyword: str | None,
@@ -203,7 +204,7 @@ def build_match_tools(ctx: RuntimeContext) -> list:
     service = RecommendationService(ctx.session, ctx.settings)
 
     @tool("recommend_jobs", args_schema=RecommendJobsInput)
-    @_safe_tool
+    @_safe_tool(ctx)
     def recommend_jobs(
         companies: list[str],
         cities: list[str],
@@ -240,7 +241,7 @@ def build_match_tools(ctx: RuntimeContext) -> list:
         }
 
     @tool("match_job")
-    @_safe_tool
+    @_safe_tool(ctx)
     def match_job(job_id: str) -> dict[str, Any]:
         """对单个已核验岗位执行完整匹配并返回解释。"""
         item = service.match_job(ctx.user, UUID(job_id))
@@ -262,7 +263,7 @@ def build_match_tools(ctx: RuntimeContext) -> list:
 
 def build_profile_tools(ctx: RuntimeContext) -> list:
     @tool("get_profile_summary")
-    @_safe_tool
+    @_safe_tool(ctx)
     def get_profile_summary() -> dict[str, Any]:
         """读取已确认用户画像和求职偏好（只读）。"""
         read = ProfileService(ctx.session).get(ctx.user)
@@ -297,31 +298,35 @@ def build_progress_tools(ctx: RuntimeContext) -> list:
     service = ApplicationService(ctx.session, ctx.settings)
 
     @tool("list_applications")
-    @_safe_tool
+    @_safe_tool(ctx)
     def list_applications(company: str | None = None) -> dict[str, Any]:
         """查询用户已登记申请记录（可按公司过滤）。"""
         applications, _total = service.list(
             ctx.user, status=None, company=company, query=None, page=1, page_size=50
         )
-        return {
-            "applications": [
+        rows: list[dict[str, Any]] = []
+        for app in applications:
+            # ``needs_review`` is derived by the API serializer, not an ORM column:
+            # reading it off the model raises AttributeError and kills the tool.
+            needs_review, stale_days = application_staleness(app)
+            rows.append(
                 {
                     "id": str(app.id),
                     "company": (app.job.company.name if app.job else app.external_company),
                     "title": (app.job.title if app.job else app.external_title),
                     "status": app.status.value,
                     "applied_at": app.applied_at.isoformat() if app.applied_at else None,
-                    "last_confirmed_at": app.last_confirmed_at.isoformat()
-                    if app.last_confirmed_at
-                    else None,
-                    "needs_review": app.needs_review,
+                    "last_confirmed_at": (
+                        app.last_confirmed_at.isoformat() if app.last_confirmed_at else None
+                    ),
+                    "needs_review": needs_review,
+                    "stale_days": stale_days,
                 }
-                for app in applications
-            ]
-        }
+            )
+        return {"total": len(rows), "applications": rows}
 
     @tool("get_application_timeline")
-    @_safe_tool
+    @_safe_tool(ctx)
     def get_application_timeline(application_id: str) -> dict[str, Any]:
         """读取某条申请的状态时间线与事件证据。"""
         events = service.events(ctx.user, UUID(application_id))
@@ -339,7 +344,7 @@ def build_progress_tools(ctx: RuntimeContext) -> list:
         }
 
     @tool("check_job_application_status")
-    @_safe_tool
+    @_safe_tool(ctx)
     def check_job_application_status(job_id: str) -> dict[str, Any]:
         """查询某个岗位是否已申请及当前状态。"""
         applications, _total = service.list(
@@ -353,25 +358,33 @@ def build_progress_tools(ctx: RuntimeContext) -> list:
     return [list_applications, get_application_timeline, check_job_application_status]
 
 
-def _safe_tool(fn):
+def _safe_tool(ctx: RuntimeContext):
     """Turn business errors into structured tool output.
 
     LangChain lets a tool exception abort the whole agent run; the model can
-    recover only if it sees a structured error instead.
+    recover only if it sees a structured error instead. Every result (success
+    or error) is also recorded on the runtime context so the run's structured
+    payload never depends on how ToolMessage content gets serialised.
     """
-    signature = inspect.signature(fn)
 
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except AppError as exc:
-            return {"error": exc.code, "message": exc.message}
-        except Exception as exc:
-            return {"error": "TOOL_FAILED", "message": str(exc)[:300]}
+    def decorate(fn):
+        signature = inspect.signature(fn)
 
-    wrapper.__signature__ = signature
-    return wrapper
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                result = fn(*args, **kwargs)
+            except AppError as exc:
+                result = {"error": exc.code, "message": exc.message}
+            except Exception as exc:
+                result = {"error": "TOOL_FAILED", "message": str(exc)[:300]}
+            ctx.record_tool(fn.__name__, result)
+            return result
+
+        wrapper.__signature__ = signature
+        return wrapper
+
+    return decorate
 
 
 def build_all_tools(ctx: RuntimeContext) -> list:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
@@ -15,6 +15,8 @@ from app.db.models.job import Job
 from app.db.models.saved_job import SavedJob
 from app.schemas.common import DataResponse
 from app.schemas.dashboard import (
+    DashboardCalendar,
+    DashboardCalendarEvent,
     DashboardCounts,
     DashboardEvent,
     DashboardJob,
@@ -171,3 +173,81 @@ def dashboard_summary(
             date=now.date(),
         )
     )
+
+
+_CALENDAR_STATUSES = (
+    ApplicationStatus.ASSESSMENT,
+    ApplicationStatus.ONLINE_ASSESSMENT,
+    ApplicationStatus.INTERVIEW,
+)
+
+
+@router.get(
+    "/calendar",
+    response_model=DataResponse[DashboardCalendar],
+    summary="按日期范围读取明确的笔试/面试日程（不含状态变更）",
+)
+def dashboard_calendar(
+    session: DbSession,
+    user: CurrentUser,
+    range_start: datetime | None = Query(
+        default=None, alias="from", description="范围起点（含），默认 180 天前"
+    ),
+    range_end: datetime | None = Query(
+        default=None, alias="to", description="范围终点（含），默认 180 天后"
+    ),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> DataResponse[DashboardCalendar]:
+    now = datetime.now(UTC)
+    start = _as_utc(range_start) or now - timedelta(days=180)
+    end = _as_utc(range_end) or now + timedelta(days=180)
+    if end < start:
+        start, end = end, start
+
+    rows = (
+        session.execute(
+            select(ApplicationEvent, Application)
+            .join(Application, Application.id == ApplicationEvent.application_id)
+            .where(
+                Application.user_id == user.id,
+                ApplicationEvent.event_time.is_not(None),
+                ApplicationEvent.event_time >= start,
+                ApplicationEvent.event_time <= end,
+                # A status change is not an appointment: only scheduled assessments
+                # and interviews may reach the calendar.
+                ApplicationEvent.to_status.in_(_CALENDAR_STATUSES),
+            )
+            .order_by(ApplicationEvent.event_time.asc(), ApplicationEvent.created_at.asc())
+            .limit(limit)
+        )
+        .unique()
+        .all()
+    )
+
+    return DataResponse(
+        data=DashboardCalendar(
+            events=[
+                DashboardCalendarEvent(
+                    id=event.id,
+                    application_id=app.id,
+                    company=app.job.company.name if app.job else app.external_company or "未知企业",
+                    title=app.job.title if app.job else app.external_title or "未知岗位",
+                    status=event.to_status.value,
+                    starts_at=event.event_time,
+                    source_type=event.source_type,
+                    verification_status=event.verification_status,
+                )
+                for event, app in rows
+                if event.event_time is not None
+            ],
+            range_start=start,
+            range_end=end,
+            generated_at=now,
+        )
+    )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)

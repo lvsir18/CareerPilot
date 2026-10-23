@@ -7,6 +7,12 @@ import { useEffect, useState } from "react";
 import { getDashboardSummary } from "@/lib/client-api";
 import type { DashboardSummary } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import {
+  formatApplicationSource,
+  formatApplicationStatus,
+  formatJobType,
+  formatVerificationStatus,
+} from "@/lib/job-display";
 
 const COUNT_LABELS: { key: keyof DashboardSummary["counts"]; label: string; href: string }[] = [
   { key: "saved", label: "已收藏岗位", href: "/saved-jobs" },
@@ -19,19 +25,7 @@ const COUNT_LABELS: { key: keyof DashboardSummary["counts"]; label: string; href
   { key: "needs_review", label: "待确认", href: "/applications" },
 ];
 
-const STATUS_LABELS: Record<string, string> = {
-  planned: "计划申请",
-  to_apply: "待申请",
-  applied: "已申请",
-  screening: "筛选中",
-  assessment: "笔试/测评",
-  online_assessment: "在线测评",
-  interview: "面试中",
-  offer: "Offer",
-  rejected: "未通过",
-  withdrawn: "已撤回",
-  unknown: "状态未知",
-};
+
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -94,16 +88,14 @@ export default function DashboardPage() {
                         {job.company} · {job.title}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {job.city ?? "城市未知"} · {job.job_type ?? "类型未知"} ·{" "}
+                        {job.city ?? "城市未知"} · {formatJobType(job.job_type)} ·{" "}
                         {job.published_at
                           ? `官网发布 ${formatDateTime(job.published_at)}`
                           : "官网发布日期未知"}
                       </p>
                       <p className="mt-1 text-[11px] text-slate-400">
-                        首次发现 {formatDateTime(job.first_seen_at)}
-                        {job.verification_status === "verified"
-                          ? " · 已核验完整 JD"
-                          : " · 待核验（仅搜索摘要）"}
+                        首次发现 {formatDateTime(job.first_seen_at)} ·{" "}
+                        {formatVerificationStatus(job.verification_status)}
                       </p>
                     </div>
                     <a
@@ -139,12 +131,8 @@ export default function DashboardPage() {
                     {event.company} · {event.title}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    {STATUS_LABELS[event.status] ?? event.status} ·{" "}
-                    {event.source_type === "email_import"
-                      ? "邮件佐证"
-                      : event.source_type === "official_api"
-                        ? "官方接口"
-                        : "用户手动记录"}
+                    {formatApplicationStatus(event.status)} ·{" "}
+                    {formatApplicationSource(event.source_type)}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-400">
                     {event.event_time ? formatDateTime(event.event_time) : "时间未知"}
@@ -173,7 +161,7 @@ export default function DashboardPage() {
                 >
                   <span>
                     {event.company} · {event.title} ·{" "}
-                    {STATUS_LABELS[event.status] ?? event.status}
+                    {formatApplicationStatus(event.status)}
                   </span>
                   <span className="text-xs text-slate-500">{formatDateTime(event.starts_at)}</span>
                 </Link>

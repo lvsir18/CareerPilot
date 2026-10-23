@@ -54,6 +54,26 @@ class DashboardUpcoming(BaseModel):
     verification_status: str
 
 
+class DashboardCalendarEvent(BaseModel):
+    """Only explicit appointment events belong on the interview calendar."""
+
+    id: UUID
+    application_id: UUID
+    company: str
+    title: str
+    status: str
+    starts_at: datetime
+    source_type: str
+    verification_status: str
+
+
+class DashboardCalendar(BaseModel):
+    events: list[DashboardCalendarEvent] = Field(default_factory=list)
+    range_start: datetime
+    range_end: datetime
+    generated_at: datetime
+
+
 class DashboardSummary(BaseModel):
     counts: DashboardCounts
     latest_jobs: list[DashboardJob] = Field(default_factory=list)

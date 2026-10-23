@@ -1,21 +1,28 @@
 "use client";
 
+import Link from "next/link";
 import { ArrowUpRight, Check, Star } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { createApplication, getRecommendations, saveJob } from "@/lib/client-api";
 import type { RecommendationItem } from "@/lib/api";
+import {
+  formatApplicationStatus,
+  formatEligibility,
+  formatJobType,
+} from "@/lib/job-display";
 
-const ELIGIBILITY_LABEL: Record<string, string> = {
-  eligible: "符合资格",
-  ineligible: "不符合资格",
-  unknown: "待进一步确认",
-};
+function eligibilityTone(status: string): string {
+  if (status === "ineligible") return "bg-rose-50 text-rose-700 ring-rose-200";
+  if (status === "eligible") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  return "bg-slate-50 text-slate-600 ring-slate-200";
+}
 
 export default function MatchesPage() {
   const [items, setItems] = useState<RecommendationItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [onlyEligible, setOnlyEligible] = useState(true);
 
   async function refresh() {
     setBusy(true);
@@ -44,6 +51,15 @@ export default function MatchesPage() {
     await refresh();
   }
 
+  const ineligibleCount = useMemo(
+    () => items.filter((item) => item.match.eligibility_status === "ineligible").length,
+    [items],
+  );
+  const visibleItems = useMemo(
+    () => (onlyEligible ? items.filter((item) => item.match.eligibility_status !== "ineligible") : items),
+    [items, onlyEligible],
+  );
+
   return (
     <div className="space-y-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -51,49 +67,63 @@ export default function MatchesPage() {
         <p className="mt-1 text-xs text-slate-500">
           基于已确认画像与完整 JD 的可解释匹配，分数不是录取概率。
         </p>
-        {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
+        {ineligibleCount > 0 ? (
+          <label className="mt-3 inline-flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={onlyEligible}
+              onChange={(event) => setOnlyEligible(event.target.checked)}
+              className="size-3.5 rounded border-slate-300"
+            />
+            只看符合我资格的岗位（已隐藏 {onlyEligible ? ineligibleCount : 0} 个不满足硬性条件的推荐）
+          </label>
+        ) : null}
+        {error ? <p className="mt-3 break-words text-sm text-rose-700">{error}</p> : null}
       </section>
 
-      {items.length === 0 ? (
+      {visibleItems.length === 0 ? (
         <p className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
           {busy
             ? "计算中..."
-            : "暂无推荐。请先上传简历、确认画像，或等待已核验岗位产生。"}
+            : items.length > 0
+              ? "当前筛选下没有符合资格的推荐，可以取消勾选查看全部。"
+              : "暂无推荐。请先上传简历、确认画像，或等待已核验岗位产生。"}
         </p>
       ) : (
         <div className="space-y-4">
-          {items.map((item) => (
+          {visibleItems.map((item) => (
             <article
               key={item.job.id}
               className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
             >
               <div className="flex flex-wrap items-center gap-3">
-                <span className="font-semibold text-slate-900">{item.job.company}</span>
+                <Link
+                  href={`/jobs/${item.job.id}`}
+                  className="font-semibold text-slate-900 hover:text-sky-700"
+                >
+                  {item.job.company}
+                </Link>
                 <span className="text-slate-700">{item.job.title}</span>
                 <span className="text-xs text-slate-500">
-                  {item.job.city ?? "城市未知"} · {item.job.job_type ?? "类型未知"}
+                  {item.job.city ?? "城市未知"} · {formatJobType(item.job.job_type)}
                 </span>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <span className="rounded-lg bg-slate-900 px-3 py-1 text-sm font-bold text-white">
-                  {item.match.match_score != null
-                    ? `${item.match.match_score}/100`
-                    : "信息不足"}
+                  {item.match.match_score != null ? `${item.match.match_score}/100` : "信息不足"}
                 </span>
                 <span
-                  className={`rounded-full px-2 py-0.5 text-[11px] ring-1 ${
-                    item.match.eligibility_status === "ineligible"
-                      ? "bg-rose-50 text-rose-700 ring-rose-200"
-                      : item.match.eligibility_status === "eligible"
-                        ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                        : "bg-slate-50 text-slate-600 ring-slate-200"
-                  }`}
+                  className={`rounded-full px-2 py-0.5 text-[11px] ring-1 ${eligibilityTone(
+                    item.match.eligibility_status,
+                  )}`}
                 >
-                  {ELIGIBILITY_LABEL[item.match.eligibility_status] ?? item.match.eligibility_status}
+                  {formatEligibility(item.match.eligibility_status)}
                 </span>
                 {item.applied_status ? (
-                  <span className="text-xs text-slate-500">已申请：{item.applied_status}</span>
+                  <span className="text-xs text-slate-500">
+                    已登记：{formatApplicationStatus(item.applied_status)}
+                  </span>
                 ) : null}
               </div>
 
@@ -139,18 +169,26 @@ export default function MatchesPage() {
                 <p className="mt-3 text-xs text-slate-500">招聘信息不完整，仅提供基础匹配。</p>
               )}
 
-              <p className="mt-3 text-xs leading-relaxed text-slate-600">
+              <p className="mt-3 break-words text-xs leading-relaxed text-slate-600">
                 推荐原因：{item.match.explanation || "暂无解释"}
               </p>
               {(item.match.eligibility_reasons ?? []).length ? (
                 <ul className="mt-2 space-y-0.5 text-xs text-rose-600">
                   {(item.match.eligibility_reasons ?? []).map((reason) => (
-                    <li key={reason}>{reason}</li>
+                    <li key={reason} className="break-words">
+                      {reason}
+                    </li>
                   ))}
                 </ul>
               ) : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+                <Link
+                  href={`/jobs/${item.job.id}`}
+                  className="font-medium text-slate-700 hover:underline"
+                >
+                  查看岗位详情与匹配
+                </Link>
                 <a
                   href={item.job.source_url}
                   target="_blank"

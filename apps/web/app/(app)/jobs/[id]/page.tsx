@@ -1,9 +1,10 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ArrowUpRight, CircleAlert, MapPin, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, CircleAlert, MapPin } from "lucide-react";
 
 import { JobActions } from "@/components/job-actions";
+import { JobMatchPanel } from "@/components/job-match-panel";
 import { StatusPill } from "@/components/status-pill";
 import { fetchJob } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -170,15 +171,7 @@ export default async function JobDetailPage({
             ) : null}
           </section>
 
-          <section className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-6">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-              <Sparkles className="size-4 text-slate-400" aria-hidden />
-              匹配分析尚未开放
-            </div>
-            <p className="mt-2 text-sm leading-relaxed text-slate-500">
-              简历画像与可解释匹配将在 M3 交付。当前不会给出任何匹配分数，避免在缺少画像时产生误导。
-            </p>
-          </section>
+          <JobMatchPanel jobId={job.id} />
         </div>
 
         <aside className="space-y-4">

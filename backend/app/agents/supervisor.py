@@ -34,6 +34,14 @@ _REQUIRED_AGENTS: dict[str, list[str]] = {
 }
 
 
+def _tool_key(item: dict[str, Any]) -> tuple[str, str]:
+    """Identity of a tool result, used to de-duplicate the two collection paths."""
+    return (
+        str(item.get("tool")),
+        json.dumps(item.get("data"), ensure_ascii=False, sort_keys=True, default=str),
+    )
+
+
 class Intent(BaseModel):
     intent: Literal[
         "job_search",
@@ -133,6 +141,7 @@ def _execute(ctx: RuntimeContext, agents: dict[str, object]):
 
         agent_results: dict[str, Any] = dict(state.get("agent_results", {}) or {})
         tool_results: list[dict[str, Any]] = list(state.get("tool_results", []) or [])
+        recorded = {_tool_key(item) for item in tool_results}
         for name in required:
             agent = agents.get(name)
             if agent is None:
@@ -166,12 +175,36 @@ def _execute(ctx: RuntimeContext, agents: dict[str, object]):
                     except (TypeError, ValueError):
                         continue
                 if isinstance(payload, dict):
-                    tool_results.append({"agent": name, "tool": message.name, "data": payload})
+                    item = {"agent": name, "tool": message.name, "data": payload}
+                    key = _tool_key(item)
+                    if key not in recorded:
+                        recorded.add(key)
+                        tool_results.append(item)
+
+        # The runtime context saw every tool call directly, so it can fill the
+        # gaps whenever a ToolMessage could not be parsed (that is what made the
+        # structured cards come back empty while the text answer was fine).
+        for item in ctx.tool_results:
+            key = _tool_key(item)
+            if key not in recorded:
+                recorded.add(key)
+                tool_results.append(item)
+
+        # A tool error means the business task did not actually succeed: report
+        # the run as partial so "completed" never masks a failed lookup.
+        errors = list(state.get("errors", []) or [])
+        for item in tool_results:
+            data = item.get("data")
+            if isinstance(data, dict) and data.get("error"):
+                message = f"{item.get('tool')}: {data['error']}"
+                if message not in errors:
+                    errors.append(message)
 
         return {
             "agent_results": agent_results,
             "tool_results": tool_results,
-            "status": "completed",
+            "errors": errors,
+            "status": "partial" if errors else "completed",
         }
 
     return node
@@ -210,7 +243,10 @@ def _aggregate(model: BaseChatModel):
         answer = final.content if hasattr(final, "content") else str(final)
         if isinstance(answer, str) and _lead_notice_needed(state) and _LEAD_NOTICE not in answer:
             answer = f"{answer.rstrip()}\n\n{_LEAD_NOTICE}"
-        return {"final_answer": answer, "status": "completed"}
+        return {
+            "final_answer": answer,
+            "status": "partial" if state.get("errors") else "completed",
+        }
 
     return node
 

@@ -155,6 +155,7 @@ class ProfileService:
             profile.projects_json = [item.model_dump() for item in (payload.projects or [])]
         if "verified_by_user" in fields:
             profile.verified_by_user = bool(payload.verified_by_user)
+            profile.confirmed_at = datetime.now(UTC) if profile.verified_by_user else None
 
         if "preferences" in fields and payload.preferences is not None:
             preferences = self._get_or_create_preferences(user)
@@ -183,10 +184,19 @@ class ProfileService:
             preferences.graduation_year = incoming.graduation_year
             preferences.remote_ok = incoming.remote_ok
 
+        content_hash = compute_profile_hash(profile, self._repository.get_preferences(user.id))
+        if (
+            "verified_by_user" not in fields
+            and profile.verified_by_user
+            and content_hash != profile.content_hash
+        ):
+            # A confirmation only covers the content it was given for. Editing
+            # confirmed content must invalidate it, otherwise the UI keeps
+            # showing "已确认" for a profile the user never reviewed.
+            profile.verified_by_user = False
+            profile.confirmed_at = None
         profile.version += 1
-        profile.content_hash = compute_profile_hash(
-            profile, self._repository.get_preferences(user.id)
-        )
+        profile.content_hash = content_hash
         self._session.commit()
         self._session.refresh(profile)
 
