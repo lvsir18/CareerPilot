@@ -20,6 +20,8 @@ from app.connectors.rendered import RenderedSourceSpec
 # Companies with a plain JSON API.
 API_SOURCES: dict[str, str] = {
     "tencent": "tencent_campus",
+    # JD exposes an unauthenticated POST endpoint that already carries the JD.
+    "jd": "jd_campus",
 }
 
 # Companies handled by rendering their official public search page.
@@ -59,6 +61,16 @@ RENDERED_SOURCES: dict[str, RenderedSourceSpec] = {
         search_input="input[placeholder*='搜索']",
         note="列表接口要求页面下发的 ajSessionId，只能由浏览器发起",
     ),
+    "minimax": RenderedSourceSpec(
+        source_type="minimax_campus_rendered",
+        company="MiniMax",
+        search_url="https://vrfi1sk8a0.jobs.feishu.cn/379481/?keywords={keyword}",
+        detail_url="https://vrfi1sk8a0.jobs.feishu.cn/379481/position/{id}/detail",
+        job_type="campus",
+        recruitment_program="校园招聘",
+        wait_ms=14000,
+        note="飞书招聘托管：接口带 _signature，只能浏览器渲染；?keywords= 生效",
+    ),
     "meituan": RenderedSourceSpec(
         source_type="meituan_campus_rendered",
         company="美团",
@@ -74,12 +86,63 @@ RENDERED_SOURCES: dict[str, RenderedSourceSpec] = {
     ),
 }
 
+# Every company the discovery filter offers. Only the subset registered above can
+# be searched by direct connection; the rest stay listed so the UI can say why.
 COMPANY_LABELS: dict[str, str] = {
-    "tencent": "腾讯",
     "bytedance": "字节跳动",
+    "tencent": "腾讯",
+    "alibaba": "阿里巴巴",
+    "baidu": "百度",
+    "meituan": "美团",
     "xiaohongshu": "小红书",
     "bilibili": "哔哩哔哩",
-    "meituan": "美团",
+    "dewu": "得物",
+    "deepseek": "DeepSeek",
+    "360": "360",
+    "xiaomi": "小米",
+    "minimax": "MiniMax",
+    "jd": "京东",
+    "kimi": "月之暗面 Kimi",
+    "ctrip": "携程",
+    "kuaishou": "快手",
+    "netease": "网易",
+    "huawei": "华为",
+    "pdd": "拼多多",
+}
+
+# Why a company is *not* wired yet. Probed on 2026-10-24; each note explains what
+# actually happened, so the UI can point at the workaround instead of failing.
+UNSUPPORTED_NOTES: dict[str, str] = {
+    "alibaba": "校园招聘站为前端渲染，列表接口需站内签名，抓到的是非岗位模块",
+    "baidu": "招聘站点会跳转到统一入口页，没有稳定的公开职位列表",
+    "dewu": "校招页可打开且有搜索框，但检索请求未返回可解析的职位 JSON",
+    "deepseek": "官网未提供公开职位列表页",
+    "360": "校招页可打开，职位列表经接口返回且格式不稳定",
+    "xiaomi": "校招页返回的是招聘计划卡片，不是职位列表",
+    "kimi": "招聘页未提供可公开检索的职位列表",
+    "ctrip": "校招页返回招聘动态/项目介绍，不是职位列表",
+    "kuaishou": "职位列表需站内交互后加载，未捕获到可解析数据",
+    "netease": "校招页首页是分类入口，职位列表需进一步下钻",
+    "huawei": "有搜索框，但检索结果未以可解析 JSON 返回",
+    "pdd": "校招页职位列表接口未公开，未捕获到可解析数据",
+}
+
+
+# Where to send the user when a company is not wired for direct search. A
+# ``{keyword}`` placeholder is filled in when the site supports query params.
+SEARCH_PAGES: dict[str, str] = {
+    "alibaba": "https://campus-talent.alibaba.com/campus/index",
+    "baidu": "https://talent.baidu.com",
+    "dewu": "https://campus.dewu.com/",
+    "deepseek": "https://www.deepseek.com/",
+    "360": "https://campus.360.cn/home",
+    "xiaomi": "https://hr.xiaomi.com/website/campus.html",
+    "kimi": "https://www.moonshot.cn/",
+    "ctrip": "https://job.ctrip.com/#/campus",
+    "kuaishou": "https://campus.kuaishou.cn/recruit/campus/e/#/campus/index/",
+    "netease": "https://campus.163.com/app/index",
+    "huawei": "https://career.huawei.com/cn/campus-recruitment",
+    "pdd": "https://careers.pddglobalhr.com/campus",
 }
 
 
@@ -88,4 +151,36 @@ def supports_official(company: str) -> bool:
 
 
 def official_company_keys() -> list[str]:
+    """Companies that can actually be searched by direct connection."""
     return sorted(set(API_SOURCES) | set(RENDERED_SOURCES))
+
+
+def official_catalog() -> list[dict[str, object]]:
+    """All filterable companies, with an explicit supported/unsupported flag."""
+    items: list[dict[str, object]] = []
+    for key, label in COMPANY_LABELS.items():
+        if key in API_SOURCES:
+            items.append({"key": key, "label": label, "supported": True, "mode": "api", "note": ""})
+        elif key in RENDERED_SOURCES:
+            items.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "supported": True,
+                    "mode": "rendered",
+                    "note": RENDERED_SOURCES[key].note,
+                    "search_page": SEARCH_PAGES.get(key, ""),
+                }
+            )
+        else:
+            items.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "supported": False,
+                    "mode": "none",
+                    "note": UNSUPPORTED_NOTES.get(key, "暂未适配官方直连"),
+                    "search_page": SEARCH_PAGES.get(key, ""),
+                }
+            )
+    return items

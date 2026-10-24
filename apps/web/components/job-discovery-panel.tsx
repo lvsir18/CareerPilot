@@ -1,14 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight, LayoutGrid, Search, ShieldCheck, Table2 } from "lucide-react";
+import { ArrowUpRight, LayoutGrid, Lock, Search, ShieldCheck, Table2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { CreateApplicationButton } from "@/components/create-application-button";
 import { JobCard } from "@/components/job-card";
 import { StatusPill } from "@/components/status-pill";
-import { discoverJobs, searchOfficialJobs, verifyJobLead } from "@/lib/client-api";
-import type { DiscoveryResponse, JobLead } from "@/lib/api";
+import {
+  discoverJobs,
+  getOfficialSources,
+  searchOfficialJobs,
+  verifyJobLead,
+} from "@/lib/client-api";
+import type { DiscoveryResponse, JobLead, OfficialSourceCompany } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -23,6 +28,15 @@ const OFFICIAL_COMPANIES = [
   { key: "bilibili", label: "哔哩哔哩" },
   { key: "meituan", label: "美团" },
 ];
+
+/** Used only when the capability catalog cannot be loaded. */
+const FALLBACK_OFFICIAL_SOURCES: OfficialSourceCompany[] = OFFICIAL_COMPANIES.map((item) => ({
+  key: item.key,
+  label: item.label,
+  supported: true,
+  mode: "rendered",
+  note: "",
+}));
 
 const COMPANIES = [
   { value: "bytedance", label: "字节跳动", priority: "P0" },
@@ -146,6 +160,35 @@ export function JobDiscoveryPanel() {
   const [tencentProject, setTencentProject] = useState("日常实习");
   const [officialBusy, setOfficialBusy] = useState(false);
   const [officialNotice, setOfficialNotice] = useState<string | null>(null);
+  // Which companies can actually be searched by direct connection comes from the
+  // backend catalog, so the UI never offers a button that is guaranteed to fail.
+  const [officialSources, setOfficialSources] = useState<OfficialSourceCompany[]>([]);
+  const [followFilter, setFollowFilter] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    void getOfficialSources().then((result) => {
+      if (!active || !result.ok) return;
+      setOfficialSources(result.data);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const catalog = officialSources.length ? officialSources : FALLBACK_OFFICIAL_SOURCES;
+  const supportedKeys = officialSources.filter((item) => item.supported).map((item) => item.key);
+  const supportedKeySignature = supportedKeys.join(",");
+
+  // "跟随上方筛选" keeps the two company lists in sync: pick 字节+美团 above and
+  // the direct-connection row follows instead of silently keeping 腾讯.
+  useEffect(() => {
+    if (!followFilter || !supportedKeySignature) return;
+    const allowed = supportedKeySignature.split(",");
+    const next = companies.filter((key) => allowed.includes(key));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- derived from the filter above
+    setOfficialCompanies(next.length ? next : allowed.slice(0, 1));
+  }, [companies, followFilter, supportedKeySignature]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -397,36 +440,71 @@ export function JobDiscoveryPanel() {
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-900">企业官网直连检索</h2>
           <span className="text-[11px] text-slate-500">
-            直接读取官方招聘页，不消耗搜索额度
+            不消耗搜索额度
+            {officialSources.length
+              ? ` · 已支持 ${officialSources.filter((item) => item.supported).length} / ${officialSources.length} 家`
+              : ""}
           </span>
         </div>
-        <p className="mt-1 text-xs text-slate-600">
-          这些公司的招聘页是前端渲染、抓 HTML 拿不到岗位；这里由服务端浏览器把关键词
-          输入官方搜索框，读取其返回的岗位数据，拿到标题、城市、招聘类型与完整 JD。
-          仅覆盖校招 / 实习（美团会先切到「应届校招」，不含社招）。
+        <p className="mt-1 text-xs leading-relaxed text-slate-600">
+          这些公司的招聘页是前端渲染、抓 HTML 拿不到岗位；这里由服务端浏览器把关键词输入官方搜索框，
+          读取其返回的岗位数据，拿到标题、城市、招聘类型与完整 JD。仅覆盖校招 / 实习
+          （美团会先切到「应届校招」，不含社招）。灰色企业暂未适配，可用上方筛选搜索或「导入岗位」。
         </p>
+        <label className="mt-2 inline-flex items-center gap-2 text-[11px] text-slate-600">
+          <input
+            type="checkbox"
+            checked={followFilter}
+            onChange={(event) => setFollowFilter(event.target.checked)}
+            className="size-3.5 rounded border-slate-300"
+          />
+          跟随上方筛选（只取上方已勾选且支持直连的企业）
+        </label>
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {OFFICIAL_COMPANIES.map((item) => {
+          {catalog.map((item) => {
             const active = officialCompanies.includes(item.key);
             return (
               <button
                 key={item.key}
                 type="button"
                 aria-pressed={active}
-                onClick={() =>
+                aria-disabled={!item.supported}
+                title={item.supported ? item.note || item.label : `${item.label}：${item.note}`}
+                onClick={() => {
+                  if (!item.supported) {
+                    const keyword = officialKeyword.trim();
+                    const page = item.search_page
+                      ? item.search_page.replace("{keyword}", encodeURIComponent(keyword))
+                      : "";
+                    if (page) {
+                      window.open(page, "_blank", "noopener,noreferrer");
+                    }
+                    setOfficialNotice(
+                      page
+                        ? `${item.label} 暂不支持自动直连：${item.note}。已打开官网搜索页${
+                            keyword ? `，在站内搜索「${keyword}」` : ""
+                          }，找到岗位后把链接或 JD 粘到「导入岗位」，会存成仅你可见的私有候选。`
+                        : `${item.label} 暂不支持自动直连：${item.note}。可用上方「筛选与搜索」，或在「导入岗位」里粘贴官方链接 / JD。`,
+                    );
+                    return;
+                  }
+                  setFollowFilter(false);
                   setOfficialCompanies((prev) =>
                     prev.includes(item.key)
                       ? prev.filter((key) => key !== item.key)
                       : [...prev, item.key],
-                  )
-                }
+                  );
+                }}
                 className={cn(
-                  "rounded-full border px-3 py-1 text-xs transition",
-                  active
-                    ? "border-sky-600 bg-sky-600 text-white"
-                    : "border-slate-300 bg-white text-slate-600 hover:border-sky-400",
+                  "inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs transition",
+                  !item.supported && "border-dashed border-slate-300 bg-white text-slate-400",
+                  item.supported &&
+                    (active
+                      ? "border-sky-600 bg-sky-600 text-white"
+                      : "border-slate-300 bg-white text-slate-600 hover:border-sky-400"),
                 )}
               >
+                {!item.supported ? <Lock className="size-3" aria-hidden /> : null}
                 {item.label}
               </button>
             );
@@ -442,20 +520,23 @@ export function JobDiscoveryPanel() {
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
           </label>
-          <label className="min-w-32">
-            <span className="text-xs font-medium text-slate-600">腾讯招聘项目</span>
-            <select
-              value={tencentProject}
-              onChange={(event) => setTencentProject(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-            >
-              <option value="日常实习">日常实习</option>
-              <option value="应届实习">应届实习</option>
-              <option value="应届毕业生">应届毕业生</option>
-              <option value="青云计划-应届生">青云计划-应届生</option>
-              <option value="青云计划-实习生">青云计划-实习生</option>
-            </select>
-          </label>
+          {officialCompanies.includes("tencent") ? (
+            <label className="min-w-36">
+              <span className="text-xs font-medium text-slate-600">腾讯招聘项目</span>
+              <select
+                value={tencentProject}
+                onChange={(event) => setTencentProject(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                <option value="日常实习">日常实习</option>
+                <option value="应届实习">应届实习</option>
+                <option value="应届毕业生">应届毕业生</option>
+                <option value="青云计划-应届生">青云计划-应届生</option>
+                <option value="青云计划-实习生">青云计划-实习生</option>
+              </select>
+              <span className="mt-1 block text-[11px] text-slate-500">仅对腾讯生效</span>
+            </label>
+          ) : null}
           <button
             type="button"
             onClick={() => void runOfficialSearch()}
@@ -467,7 +548,7 @@ export function JobDiscoveryPanel() {
           </button>
         </div>
         {officialNotice ? (
-          <p className="mt-2 text-xs text-slate-700">{officialNotice}</p>
+          <p className="mt-2 break-words text-xs text-slate-700">{officialNotice}</p>
         ) : null}
       </section>
 

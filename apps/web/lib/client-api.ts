@@ -36,6 +36,7 @@ import {
   type SavedJob,
   type SessionUser,
   type OfficialSearchResult,
+  type OfficialSourceCompany,
   type TencentImportResult,
 } from "@/lib/api";
 
@@ -648,6 +649,10 @@ export function importTencentJobs(payload: {
     body: payload,
     timeoutMs: 90_000,
   });
+}
+
+export function getOfficialSources(): Promise<ApiResult<OfficialSourceCompany[]>> {
+  return request<OfficialSourceCompany[]>("/api/v1/official/sources");
 }
 
 export function searchOfficialJobs(payload: {

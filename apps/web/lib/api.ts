@@ -949,6 +949,17 @@ export interface OfficialSearchJob {
   requirements: number;
 }
 
+export interface OfficialSourceCompany {
+  key: string;
+  label: string;
+  /** False = listed but not wired yet; UI must not pretend it works. */
+  supported: boolean;
+  mode: "api" | "rendered" | "none";
+  note: string;
+  /** Official search page to open when direct search is not wired yet. */
+  search_page?: string;
+}
+
 export interface OfficialSearchResult {
   keyword: string;
   created: number;

@@ -27,10 +27,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.connectors.errors import ConnectorError
+from app.connectors.jd_campus import JdCampusConnector
 from app.connectors.official_sources import (
     API_SOURCES,
     COMPANY_LABELS,
     RENDERED_SOURCES,
+    UNSUPPORTED_NOTES,
+    official_catalog,
     official_company_keys,
 )
 from app.connectors.rendered import RenderedJobSearch
@@ -56,18 +59,8 @@ class _Fetched:
 
 
 def supported_sources() -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for key in official_company_keys():
-        mode = "api" if key in API_SOURCES else "rendered"
-        items.append(
-            {
-                "key": key,
-                "label": COMPANY_LABELS.get(key, key),
-                "mode": mode,
-                "note": "" if mode == "api" else RENDERED_SOURCES[key].note,
-            }
-        )
-    return items
+    """Full company catalog: ``supported`` tells the UI what is clickable."""
+    return official_catalog()
 
 
 class OfficialJobsService:
@@ -91,11 +84,21 @@ class OfficialJobsService:
         requested = [key for key in dict.fromkeys(companies) if key]
         if not requested:
             requested = ["tencent"]
-        unsupported = [key for key in requested if key not in COMPANY_LABELS]
-        if unsupported:
+        unknown = [key for key in requested if key not in COMPANY_LABELS]
+        if unknown:
             raise AppError(
                 "UNSUPPORTED_COMPANY",
-                f"暂不支持这些公司的官方直连：{'、'.join(unsupported)}",
+                f"未知企业：{'、'.join(unknown)}",
+                status_code=400,
+            )
+        # Multi-select must not fail as a batch just because one company is not
+        # wired yet: skip it and report the reason in this run's summary.
+        unsupported = [key for key in requested if key not in official_company_keys()]
+        requested = [key for key in requested if key in official_company_keys()]
+        if not requested:
+            raise AppError(
+                "UNSUPPORTED_COMPANY",
+                "所选企业暂不支持官方直连，请改用上方筛选搜索或「导入岗位」手动添加",
                 status_code=400,
             )
         bounded = max(1, min(limit, MAX_LIMIT))
@@ -115,17 +118,33 @@ class OfficialJobsService:
                     except Exception as exc:  # defensive: never fail the batch
                         results.append(_Fetched(key="unknown", jobs=[], error=str(exc)))
 
-        order = {key: idx for idx, key in enumerate(requested)}
+        results.extend(
+            _Fetched(
+                key=key,
+                jobs=[],
+                error=f"暂不支持官方直连：{UNSUPPORTED_NOTES.get(key, '未适配')}",
+            )
+            for key in unsupported
+        )
+
+        order = {key: idx for idx, key in enumerate([*requested, *unsupported])}
         results.sort(key=lambda item: order.get(item.key, 99))
 
         created = updated = unchanged = 0
         summary: list[dict[str, Any]] = []
         jobs_out: list[dict[str, Any]] = []
         for item in results:
+            mode = (
+                "api"
+                if item.key in API_SOURCES
+                else "rendered"
+                if item.key in RENDERED_SOURCES
+                else "none"
+            )
             row = {
                 "key": item.key,
                 "label": COMPANY_LABELS.get(item.key, item.key),
-                "mode": "api" if item.key in API_SOURCES else "rendered",
+                "mode": mode,
                 "fetched": len(item.jobs),
                 "created": 0,
                 "updated": 0,
@@ -200,6 +219,8 @@ class OfficialJobsService:
     def _fetch_api(
         self, key: str, keyword: str | None, limit: int, project: str | None = None
     ) -> list[RawJob]:
+        if key == "jd":
+            return self._fetch_jd(keyword, limit)
         if key != "tencent":
             return []
         connector = TencentCampusConnector(self._settings)
@@ -212,6 +233,20 @@ class OfficialJobsService:
                     continue
                 try:
                     jobs.append(connector.to_raw_job(connector.detail(post_id)))
+                except ConnectorError:
+                    continue
+            return jobs
+        finally:
+            connector.close()
+
+    def _fetch_jd(self, keyword: str | None, limit: int) -> list[RawJob]:
+        connector = JdCampusConnector()
+        try:
+            rows = connector.search(keyword, page_size=max(limit, 10))
+            jobs: list[RawJob] = []
+            for row in rows[:limit]:
+                try:
+                    jobs.append(connector.to_raw_job(row))
                 except ConnectorError:
                     continue
             return jobs
