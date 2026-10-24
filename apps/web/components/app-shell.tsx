@@ -12,14 +12,17 @@ import {
   FileText,
   LayoutDashboard,
   LogOut,
+  Menu,
   Settings,
   Sparkles,
   Star,
   UserRound,
+  X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { logout } from "@/lib/client-api";
+import { clearAllProfileDrafts } from "@/lib/profile-draft";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -99,7 +102,47 @@ export function AppShell({
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [navOpen, setNavOpen] = useState(false);
   const current = NAV_ITEMS.find((item) => item.href && isActive(pathname, item.href));
+
+  function renderNav(onNavigate?: () => void): ReactNode {
+    return NAV_ITEMS.map((item) =>
+      item.href ? (
+        <Link
+          key={item.label}
+          href={item.href}
+          onClick={onNavigate}
+          aria-current={isActive(pathname, item.href) ? "page" : undefined}
+          className={cn(
+            "flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
+            isActive(pathname, item.href)
+              ? "bg-slate-800/80 font-medium text-white"
+              : "text-slate-400 hover:bg-slate-900 hover:text-slate-200",
+          )}
+        >
+          <span className="flex items-center gap-2.5">
+            {item.icon}
+            {item.label}
+          </span>
+        </Link>
+      ) : (
+        <div
+          key={item.label}
+          aria-disabled="true"
+          title={`${item.hint} 里程碑交付`}
+          className="flex cursor-not-allowed items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-500"
+        >
+          <span className="flex items-center gap-2.5">
+            {item.icon}
+            {item.label}
+          </span>
+          <span className="rounded border border-slate-700 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
+            {item.hint}
+          </span>
+        </div>
+      ),
+    );
+  }
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -110,6 +153,9 @@ export function AppShell({
       setLoggingOut(false);
       return;
     }
+    // Local drafts are per account; leaving them behind is what let the next
+    // account on this browser see the previous user's unsaved edits.
+    clearAllProfileDrafts();
     router.replace("/login");
     router.refresh();
   }
@@ -127,54 +173,18 @@ export function AppShell({
           </div>
         </div>
 
-        <nav aria-label="主导航" className="mt-2 flex-1 space-y-1 px-3">
-          {NAV_ITEMS.map((item) =>
-            item.href ? (
-              <Link
-                key={item.label}
-                href={item.href}
-                aria-current={
-                  isActive(pathname, item.href) ? "page" : undefined
-                }
-                className={cn(
-                  "flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
-                  isActive(pathname, item.href)
-                    ? "bg-slate-800/80 font-medium text-white"
-                    : "text-slate-400 hover:bg-slate-900 hover:text-slate-200",
-                )}
-              >
-                <span className="flex items-center gap-2.5">
-                  {item.icon}
-                  {item.label}
-                </span>
-              </Link>
-            ) : (
-              <div
-                key={item.label}
-                aria-disabled="true"
-                title={`${item.hint} 里程碑交付`}
-                className="flex cursor-not-allowed items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-500"
-              >
-                <span className="flex items-center gap-2.5">
-                  {item.icon}
-                  {item.label}
-                </span>
-                <span className="rounded border border-slate-700 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
-                  {item.hint}
-                </span>
-              </div>
-            ),
-          )}
+        <nav aria-label="主导航" className="mt-2 flex-1 space-y-1 overflow-y-auto px-3">
+          {renderNav()}
         </nav>
 
         <div className="border-t border-slate-800 p-4">
           <div className="rounded-lg bg-slate-900 p-3">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">当前阶段</span>
-              <span className="font-mono text-sky-300">M6</span>
+              <span className="text-slate-400">使用建议</span>
+              <span className="text-sky-300">3 步</span>
             </div>
             <p className="mt-2 text-xs leading-relaxed text-slate-500">
-              简历解析、个人画像、可解释匹配与 LangGraph 多 Agent 工作流已可用。
+              上传简历 → 核对并确认画像 → 查看推荐并登记投递进度。
             </p>
           </div>
           <div className="mt-3 flex items-center justify-between gap-2 px-1">
@@ -194,20 +204,82 @@ export function AppShell({
           {logoutError ? (
             <p className="mt-2 px-1 text-[11px] text-rose-400">{logoutError}</p>
           ) : null}
-          <p className="mt-2 px-1 font-mono text-[11px] text-slate-600">v0.1.0 · dev baseline</p>
         </div>
       </aside>
+
+      {/* Mobile navigation: the desktop sidebar is hidden below lg, and without
+          this drawer a phone user has no way to reach the rest of the app. */}
+      {navOpen ? (
+        <div className="fixed inset-0 z-40 lg:hidden">
+          <button
+            type="button"
+            aria-label="关闭导航菜单"
+            onClick={() => setNavOpen(false)}
+            className="absolute inset-0 h-full w-full bg-slate-900/50"
+          />
+          <nav
+            aria-label="主导航"
+            className="absolute inset-y-0 left-0 flex w-72 max-w-[85%] flex-col overflow-y-auto bg-slate-950 shadow-xl"
+          >
+            <div className="flex items-center justify-between px-5 py-4">
+              <div className="flex items-center gap-3">
+                <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 text-sm font-bold text-white">
+                  CP
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-white">CareerPilot</p>
+                  <p className="text-xs text-slate-400">智能求职 Agent</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭导航菜单"
+                onClick={() => setNavOpen(false)}
+                className="rounded-md p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X className="size-4" aria-hidden />
+              </button>
+            </div>
+            <div className="flex-1 space-y-1 px-3 pb-4">{renderNav(() => setNavOpen(false))}</div>
+            <div className="border-t border-slate-800 px-5 py-3">
+              <p className="truncate text-[11px] text-slate-500" title={userEmail}>
+                {userEmail}
+              </p>
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="mt-2 inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-white disabled:opacity-50"
+              >
+                <LogOut className="size-3" aria-hidden />
+                {loggingOut ? "退出中" : "退出"}
+              </button>
+            </div>
+          </nav>
+        </div>
+      ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
         <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/85 backdrop-blur">
           <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-sky-400 to-indigo-500 text-[11px] font-bold text-white lg:hidden">
+            <div className="flex min-w-0 items-center gap-2 text-sm">
+              <button
+                type="button"
+                onClick={() => setNavOpen(true)}
+                aria-label="打开导航菜单"
+                aria-expanded={navOpen}
+                className="inline-flex size-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 lg:hidden"
+              >
+                <Menu className="size-4" aria-hidden />
+              </button>
+              <span className="hidden size-7 items-center justify-center rounded-lg bg-gradient-to-br from-sky-400 to-indigo-500 text-[11px] font-bold text-white sm:flex lg:hidden">
                 CP
               </span>
-              <span className="text-slate-400">CareerPilot</span>
-              <span className="text-slate-300">/</span>
-              <span className="font-medium text-slate-900">{current?.label ?? "概览"}</span>
+              <span className="hidden text-slate-400 sm:inline">CareerPilot</span>
+              <span className="hidden text-slate-300 sm:inline">/</span>
+              <span className="truncate font-medium text-slate-900">
+                {current?.label ?? "概览"}
+              </span>
             </div>
             <div className="flex items-center gap-3">
               <span className="hidden max-w-[220px] truncate text-xs text-slate-500 sm:inline">

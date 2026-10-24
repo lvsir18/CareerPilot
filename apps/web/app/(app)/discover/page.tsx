@@ -7,7 +7,7 @@ export default function DiscoverPage() {
     <div className="space-y-6">
       <header className="border-b border-slate-200 pb-5">
         <p className="text-xs font-semibold tracking-[0.2em] text-sky-600 uppercase">
-          M2-R1 · 站外发现
+          官方来源 · 可核验
         </p>
         <h1 className="mt-2 text-2xl font-semibold text-slate-900">发现官方岗位</h1>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-600">

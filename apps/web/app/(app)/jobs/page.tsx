@@ -43,7 +43,7 @@ export default async function JobsPage({
             这里只收录已读取到官方详情页的岗位；搜索命中的候选链接在页面底部单独列出，核验通过后才会进入岗位库。
           </p>
         </div>
-        <StatusPill tone="neutral">M1 · 只读岗位数据</StatusPill>
+        <StatusPill tone="neutral">仅收录官方已核验岗位</StatusPill>
       </header>
 
       <form
@@ -182,8 +182,8 @@ export default async function JobsPage({
               </div>
               <h2 className="mt-4 text-base font-semibold text-slate-900">没有匹配的岗位</h2>
               <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-slate-500">
-                尝试减少筛选条件或更换关键词。若刚完成部署，可运行 <code>make seed</code>{" "}
-                导入明确标注的演示岗位。
+                尝试减少筛选条件或更换关键词，也可以去「发现岗位」按企业官网直连检索，
+                或粘贴一个官方 JD 链接手动导入。
               </p>
               <Link
                 href="/jobs"

@@ -138,6 +138,9 @@ class ApplicationEvent(UUIDPrimaryKeyMixin, Base):
     is_scheduled: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )
+    # A rescheduled/cancelled appointment keeps its row for audit but stops being
+    # an active calendar slot; superseding is never a delete.
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     actor: Mapped[str] = mapped_column(String(32), default="user", nullable=False)
     # Kept for M1 compatibility; new code uses source_type.
     evidence_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)

@@ -63,7 +63,22 @@ class RecommendationService:
     def _profile_data(self, user: User) -> tuple[ProfileRead, CandidateProfile | None]:
         row = self._profiles.get_profile(user.id)
         preferences = self._profiles.get_preferences(user.id)
-        read = ProfileService(self._session)._serialize(row, preferences)
+        read = ProfileService(self._session)._serialize(user.id, row, preferences)
+        return read, row
+
+    def _confirmed_profile(self, user: User) -> tuple[ProfileRead, CandidateProfile | None]:
+        """Single gate for every scoring entry point.
+
+        Scoring a draft profile produced scores the job page then refused to
+        show, so both pages must answer the same way: confirm first.
+        """
+        read, row = self._profile_data(user)
+        if not read.verified_by_user:
+            raise AppError(
+                code="PROFILE_NOT_CONFIRMED",
+                message="画像尚未确认：请先在「我的画像」完成确认，再查看匹配与推荐",
+                status_code=409,
+            )
         return read, row
 
     def _match_job(
@@ -110,7 +125,7 @@ class RecommendationService:
         job = self._jobs.get(job_id, include_demo=self._settings.demo_mode)
         if job is None:
             raise AppError(code="JOB_NOT_FOUND", message="岗位不存在", status_code=404)
-        profile_read, profile_row = self._profile_data(user)
+        profile_read, profile_row = self._confirmed_profile(user)
         result = self._match_job(user, profile_read, profile_row, job)
         saved, applied_status = self._status(user, job)
         return RecommendationItem(
@@ -135,7 +150,7 @@ class RecommendationService:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[RecommendationItem], int]:
-        profile_read, profile_row = self._profile_data(user)
+        profile_read, profile_row = self._confirmed_profile(user)
         jobs, _ = self._jobs.list(
             JobQuery(
                 companies=companies,

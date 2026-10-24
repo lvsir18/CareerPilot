@@ -163,6 +163,8 @@ def add_application_event(
         source_type=payload.source_type,
         source_reference=payload.source_reference,
         verification_status=payload.verification_status,
+        supersede_scheduled=payload.supersede_scheduled,
+        reschedule_event_id=payload.reschedule_event_id,
     )
     return DataResponse(data=event_to_read(event))
 
@@ -202,3 +204,19 @@ def delete_application(
 ) -> Response:
     ApplicationService(session, settings).delete(user, application_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{application_id}/events/{event_id}/cancel",
+    response_model=DataResponse[ApplicationEventRead],
+    summary="取消一条已登记的预约（保留历史，不再占用日历）",
+)
+def cancel_application_event(
+    application_id: UUID,
+    event_id: UUID,
+    session: DbSession,
+    settings: AppSettings,
+    user: CurrentUser,
+) -> DataResponse[ApplicationEventRead]:
+    event = ApplicationService(session, settings).cancel_event(user, application_id, event_id)
+    return DataResponse(data=event_to_read(event))

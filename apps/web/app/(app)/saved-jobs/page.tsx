@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ArrowUpRight, Star } from "lucide-react";
 
 import { StatusPill } from "@/components/status-pill";
+import { UnsaveJobButton } from "@/components/unsave-job-button";
 import { fetchSavedJobs } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { formatJobType, formatVerificationStatus, verificationTone } from "@/lib/job-display";
@@ -44,7 +45,7 @@ export default async function SavedJobsPage() {
                     {formatDateTime(item.created_at)}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <StatusPill tone={verificationTone(item.job.verification_status)}>
                     {formatVerificationStatus(item.job.verification_status)}
                   </StatusPill>
@@ -62,6 +63,7 @@ export default async function SavedJobsPage() {
                   >
                     <Star className="size-3" aria-hidden /> 详情
                   </Link>
+                  <UnsaveJobButton jobId={item.job.id} />
                 </div>
               </div>
             </article>

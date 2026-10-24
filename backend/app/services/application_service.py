@@ -239,7 +239,9 @@ class ApplicationService:
             is_scheduled=is_scheduled,
         )
         application.status = status
-        application.last_confirmed_at = event_time
+        # A future appointment is created *now*: "最近确认" is the moment the user
+        # recorded it, while the calendar keeps the interview slot itself.
+        application.last_confirmed_at = datetime.now(UTC) if is_scheduled else event_time
         application.source_type = source_type.value
         application.source_reference = source_reference
         if status == ApplicationStatus.APPLIED and application.applied_at is None:
@@ -259,6 +261,8 @@ class ApplicationService:
         source_type: ApplicationSourceType,
         source_reference: str | None,
         verification_status: EventVerificationStatus,
+        supersede_scheduled: bool = False,
+        reschedule_event_id: UUID | None = None,
     ) -> ApplicationEvent:
         application = self._repository.get_for_update(user.id, application_id)
         if application is None:
@@ -273,6 +277,50 @@ class ApplicationService:
             )
             if existing is not None:
                 return existing
+        scheduled = event_time is not None and status in _SCHEDULED_STATUSES
+        if supersede_scheduled or reschedule_event_id is not None:
+            if not scheduled:
+                raise AppError(
+                    code="INVALID_RESCHEDULE",
+                    message="改期需要明确的预约类型和时间",
+                    status_code=422,
+                )
+            if reschedule_event_id is not None:
+                target = self._repository.get_event(application.id, reschedule_event_id)
+                if target is None or not target.is_scheduled:
+                    raise AppError(
+                        code="APPLICATION_EVENT_NOT_FOUND", message="预约不存在", status_code=404
+                    )
+                if target.superseded_at is not None:
+                    raise AppError(
+                        code="APPOINTMENT_NOT_ACTIVE",
+                        message="该预约已改期或取消，请刷新后重试",
+                        status_code=409,
+                    )
+                if target.to_status != status:
+                    raise AppError(
+                        code="APPOINTMENT_TYPE_MISMATCH",
+                        message="改期需保持原预约类型",
+                        status_code=409,
+                    )
+            else:
+                candidates = [
+                    event
+                    for event in self._repository.events(application.id)
+                    if event.is_scheduled
+                    and event.superseded_at is None
+                    and event.to_status == status
+                ]
+                if len(candidates) != 1:
+                    raise AppError(
+                        code="APPOINTMENT_SELECTION_REQUIRED",
+                        message="请选择具体要改期的预约，其他轮次将保留",
+                        status_code=409,
+                    )
+                target = candidates[0]
+            # The application lock serializes edits; retire only this event in
+            # the same transaction as creating its replacement.
+            target.superseded_at = datetime.now(UTC)
         event = self._add_event(
             application,
             status=status,
@@ -284,11 +332,29 @@ class ApplicationService:
             verification_status=verification_status,
             # Only an explicit time on an assessment/interview event is a
             # calendar appointment; a bare status change is not.
-            is_scheduled=event_time is not None and status in _SCHEDULED_STATUSES,
+            is_scheduled=scheduled,
         )
         self._session.commit()
         self._session.refresh(event)
         self._session.refresh(application)
+        return event
+
+    def cancel_event(self, user: User, application_id: UUID, event_id: UUID) -> ApplicationEvent:
+        """Cancel one appointment without deleting the audit trail."""
+        application = self._repository.get_for_update(user.id, application_id)
+        if application is None:
+            raise AppError(code="APPLICATION_NOT_FOUND", message="申请记录不存在", status_code=404)
+        event = self._repository.get_event(application.id, event_id)
+        if event is None or not event.is_scheduled:
+            raise AppError(
+                code="APPLICATION_EVENT_NOT_FOUND",
+                message="这条预约不存在或不是可取消的日程",
+                status_code=404,
+            )
+        if event.superseded_at is None:
+            event.superseded_at = datetime.now(UTC)
+            self._session.commit()
+            self._session.refresh(event)
         return event
 
     def update_status(

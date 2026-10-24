@@ -2,7 +2,8 @@
 
 import { Bot, Menu, Pencil, Plus, Send, Trash2, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentMessageBubble } from "@/components/agent-message";
 import {
@@ -101,15 +102,18 @@ function withAnswer(list: AgentMessage[], answer: string | null | undefined): Ag
   return [...list, { role: "assistant", content: answer }];
 }
 
-export default function AgentPage() {
+function AgentPageInner() {
+  const searchParams = useSearchParams();
+  // The hand-off query is a route param, not a one-off DOM read: during a
+  // client-side navigation the previous page's URL is still in window.location
+  // when this component first renders, which is how the filters were lost.
+  const handoffQuery = searchParams.get("q") ?? "";
+  const requestedThread = searchParams.get("thread") ?? "";
   const [threads, setThreads] = useState<AgentThread[]>([]);
   const [current, setCurrent] = useState<AgentThread | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [input, setInput] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return new URLSearchParams(window.location.search).get("q") ?? "";
-  });
+  const [input, setInput] = useState(handoffQuery);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [structured, setStructured] = useState<AgentRunResult["structured"]>(null);
@@ -127,6 +131,8 @@ export default function AgentPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const creatingThread = useRef<Promise<AgentThread | null> | null>(null);
+  const appliedHandoff = useRef(handoffQuery);
+  const openedThread = useRef<string | null>(null);
 
   const detachStream = useCallback(() => {
     streamRef.current?.close();
@@ -146,6 +152,7 @@ export default function AgentPage() {
     (status: string, result: AgentRunResult | null) => {
       detachStream();
       setBusy(false);
+      setLoadingMessages(false);
       setRunStatus(status);
       setRun((prev) => (prev ? { ...prev, status } : prev));
       setWaitingApproval(status === "waiting_for_user");
@@ -172,7 +179,7 @@ export default function AgentPage() {
 
       const handle = (eventType: string) => (event: Event) => {
         if (stale()) {
-          detachStream();
+          source.close();
           return;
         }
         let parsed: {
@@ -231,6 +238,10 @@ export default function AgentPage() {
       }
 
       source.onerror = () => {
+        if (stale()) {
+          source.close();
+          return;
+        }
         if (finished) return;
         finished = true;
         detachStream();
@@ -271,10 +282,12 @@ export default function AgentPage() {
 
   const openThread = useCallback(
     async (thread: AgentThread) => {
+      openedThread.current = thread.id;
       const token = loadToken.current + 1;
       loadToken.current = token;
       detachStream();
       setCurrent(thread);
+      setBusy(false);
       setError(null);
       setStructured(null);
       setRun(null);
@@ -299,6 +312,15 @@ export default function AgentPage() {
     [detachStream, restoreRun],
   );
 
+  // URL changes within this page must not detach its current subscription.
+  // Actual thread switches do so in openThread/newThread; unmount does it here.
+  useEffect(() => {
+    return () => {
+      loadToken.current += 1;
+      detachStream();
+    };
+  }, [detachStream]);
+
   useEffect(() => {
     let active = true;
     void (async () => {
@@ -311,17 +333,33 @@ export default function AgentPage() {
         return;
       }
       setThreads(result.data);
-      const requested = new URLSearchParams(window.location.search).get("thread");
-      const target = result.data.find((item) => item.id === requested) ?? result.data[0];
-      if (target) {
+      // A hand-off starts a fresh conversation: reusing the most recent thread
+      // both hides the new question among old answers and drops ?q= from the URL.
+      const target = requestedThread
+        ? result.data.find((item) => item.id === requestedThread)
+        : handoffQuery
+          ? undefined
+          : result.data[0];
+      // ``syncThreadUrl`` below rewrites the URL, which re-runs this effect; the
+      // ref keeps that from opening the same thread twice.
+      if (target && target.id !== openedThread.current) {
+        openedThread.current = target.id;
         await openThread(target);
       }
     })();
     return () => {
       active = false;
-      detachStream();
     };
-  }, [detachStream, openThread]);
+  }, [detachStream, openThread, requestedThread, handoffQuery]);
+
+  // Keep the composer in sync when the route param changes without a remount.
+  useEffect(() => {
+    if (!handoffQuery || handoffQuery === appliedHandoff.current) {
+      return;
+    }
+    appliedHandoff.current = handoffQuery;
+    setInput(handoffQuery);
+  }, [handoffQuery]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -338,10 +376,12 @@ export default function AgentPage() {
         return null;
       }
       setThreads((prev) => [result.data, ...prev]);
+      openedThread.current = result.data.id;
       loadToken.current += 1;
       detachStream();
       setCurrent(result.data);
       setMessages([]);
+      setLoadingMessages(false);
       setStructured(null);
       setRun(null);
       setRunStatus(null);
@@ -404,10 +444,13 @@ export default function AgentPage() {
       cancelRename();
     }
     if (current?.id === thread.id) {
+      openedThread.current = null;
       loadToken.current += 1;
       detachStream();
       setCurrent(null);
       setMessages([]);
+      setLoadingMessages(false);
+      setBusy(false);
       setSteps([]);
       setStructured(null);
       setRun(null);
@@ -420,7 +463,7 @@ export default function AgentPage() {
 
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || loadingMessages) return;
 
     // A thread created milliseconds ago may still be in flight; binding the run
     // to the older thread is what produced the mis-associated run in testing.
@@ -438,6 +481,7 @@ export default function AgentPage() {
         return;
       }
       thread = created.data;
+      openedThread.current = created.data.id;
       setThreads((prev) => [created.data, ...prev]);
       setCurrent(created.data);
       syncThreadUrl(created.data.id);
@@ -545,8 +589,19 @@ export default function AgentPage() {
 
   const hasCards = Boolean(
     structured &&
-      (structured.jobs?.length || structured.matches?.length || structured.applications?.length),
+      (structured.jobs?.length ||
+        structured.matches?.length ||
+        structured.extra_matches?.length ||
+        structured.applications?.length),
   );
+
+  // Eligible matches first and the rest explicitly labelled: the same styling
+  // for a 运营 job the user cannot apply to read as "recommended".
+  const matchCards = structured?.matches ?? [];
+  const orderedMatches = [
+    ...matchCards.filter((item) => item.match?.eligibility_status !== "ineligible"),
+    ...matchCards.filter((item) => item.match?.eligibility_status === "ineligible"),
+  ];
 
   return (
     <div className="relative flex h-[calc(100vh-6rem)] min-w-0 gap-4 overflow-hidden">
@@ -760,13 +815,22 @@ export default function AgentPage() {
                   </div>
                 ))}
 
-                {structured.matches?.slice(0, 6).map((item, index) => (
+                {orderedMatches.slice(0, 6).map((item, index) => (
                   <div
                     key={`match-${item.job?.id ?? index}`}
-                    className="min-w-0 rounded-lg border border-slate-200 bg-white p-3"
+                    className={
+                      item.match?.eligibility_status === "ineligible"
+                        ? "min-w-0 rounded-lg border border-rose-200 bg-rose-50/40 p-3"
+                        : "min-w-0 rounded-lg border border-slate-200 bg-white p-3"
+                    }
                   >
                     <p className="break-words text-sm font-medium text-slate-800">
                       {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
+                      {item.match?.eligibility_status === "ineligible" ? (
+                        <span className="ml-2 rounded-full bg-rose-100 px-1.5 py-0.5 align-middle text-[10px] font-normal text-rose-700">
+                          资格不符 · 仅供参考
+                        </span>
+                      ) : null}
                     </p>
                     <p className="mt-0.5 text-xs text-slate-500">
                       匹配{" "}
@@ -804,6 +868,27 @@ export default function AgentPage() {
                     </div>
                   </div>
                 ))}
+
+                {structured.extra_matches?.length ? (
+                  <details className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <summary className="cursor-pointer text-xs text-slate-600">
+                      另有 {structured.extra_matches.length} 个候选未列入本轮条件
+                    </summary>
+                    <ul className="mt-2 space-y-1">
+                      {structured.extra_matches.slice(0, 10).map((item, index) => (
+                        <li
+                          key={`extra-${item.job?.id ?? index}`}
+                          className="break-words text-xs text-slate-500"
+                        >
+                          {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
+                          <span className="ml-1 text-slate-400">
+                            （{item.selection_reason ?? "未列入本轮条件"}）
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
 
                 {structured.applications?.slice(0, 6).map((app, index) => (
                   <div
@@ -904,7 +989,7 @@ export default function AgentPage() {
             <button
               type="button"
               onClick={() => void send()}
-              disabled={busy || !input.trim()}
+              disabled={busy || loadingMessages || !input.trim()}
               aria-label="发送"
               className="shrink-0 rounded-xl bg-slate-900 p-2.5 text-white shadow-sm disabled:opacity-40"
             >
@@ -951,4 +1036,15 @@ async function pollRun(
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   finish("timed_out", null);
+}
+
+// useSearchParams needs a Suspense boundary when the route is prerendered.
+export default function AgentPage() {
+  return (
+    <Suspense
+      fallback={<p className="p-6 text-sm text-slate-500">正在打开求职助手…</p>}
+    >
+      <AgentPageInner />
+    </Suspense>
+  );
 }

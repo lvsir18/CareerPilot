@@ -161,9 +161,13 @@ def test_timeline_tool_returns_events(db_session: Session, settings: Settings) -
     interview = next(item for item in result["events"] if item["status"] == "interview")
     assert interview["event_time"].startswith("2026-11-02")
     assert interview["summary"] == "电话通知面试"
-    assert interview["scheduled"] is True
+    assert interview["appointment"] is True
+    # 02:00 UTC is 10:00 in Beijing; the label must be pre-rendered so the model
+    # never converts a timezone by itself.
+    assert interview["starts_at_label"] == "2026-11-02 10:00（北京时间）"
+    assert interview["recorded_at"]
     applied = next(item for item in result["events"] if item["status"] == "applied")
-    assert applied["scheduled"] is False
+    assert applied["appointment"] is False
 
 
 def test_progress_tool_serialises_existing_applications(
@@ -199,3 +203,187 @@ def test_progress_tool_serialises_existing_applications(
     assert row["status"] == "applied"
     assert row["needs_review"] is False
     assert row["stale_days"] == 0
+
+
+def test_progress_tools_expose_appointment_and_identifiers(
+    db_session: Session, settings: Settings
+) -> None:
+    """Regression: the assistant denied a scheduled interview and mismatched ids."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models.enums import (
+        ApplicationSourceType,
+        ApplicationStatus,
+        EventVerificationStatus,
+    )
+    from app.services.application_service import ApplicationService
+    from tests.factories import create_job
+
+    user = _user(db_session, "agent-next@example.com")
+    # A real source_job_id is the id from the official detail URL, not the number
+    # printed in the title.
+    job = create_job(
+        db_session,
+        company="百度",
+        title="测试开发实习生",
+        source_job_id="24666ec4-e770-4827-8fb9-6a6d165f4376",
+    )
+    service = ApplicationService(db_session, settings)
+    application = service.create(
+        user,
+        job_id=job.id,
+        job_lead_id=None,
+        external_company=None,
+        external_title=None,
+        external_url=None,
+        status=ApplicationStatus.APPLIED,
+        notes=None,
+        applied_at=None,
+    )
+    starts_at = datetime.now(UTC) + timedelta(days=2)
+    service.add_event(
+        user,
+        application.id,
+        status=ApplicationStatus.INTERVIEW,
+        event_time=starts_at,
+        note=None,
+        evidence_summary="HR 电话约定一面",
+        source_type=ApplicationSourceType.MANUAL,
+        source_reference=None,
+        verification_status=EventVerificationStatus.USER_REPORTED,
+    )
+
+    ctx = RuntimeContext(user_id=user.id, user=user, session=db_session, settings=settings)
+    tools = {tool.name: tool for tool in build_all_tools(ctx)}
+
+    listed = tools["list_applications"].invoke({})
+    assert "error" not in listed, listed
+    row = listed["applications"][0]
+    assert row["job_no"] == "24666ec4-e770-4827-8fb9-6a6d165f4376"
+    assert row["job_id"] == str(job.id)
+    assert row["application_id"] == str(application.id)
+    assert row["next_appointment"]["starts_at_label"].endswith("（北京时间）")
+
+    for identifier in (
+        str(application.id),
+        str(job.id),
+        "24666ec4-e770-4827-8fb9-6a6d165f4376",
+    ):
+        checked = tools["check_job_application_status"].invoke({"identifier": identifier})
+        assert checked["applied"] is True, (identifier, checked)
+        assert checked["status"] == "interview"
+
+    for unknown_value in ("999999", "J106720"):
+        unknown = tools["check_job_application_status"].invoke({"identifier": unknown_value})
+        # Neither a stray number nor the title's display code may masquerade as
+        # "not applied".
+        assert unknown["error"] == "IDENTIFIER_NOT_RECOGNIZED"
+
+
+def test_appointment_keeps_confirmation_time_in_the_past(
+    db_session: Session, settings: Settings
+) -> None:
+    """UX3-11: a future slot must not become ``last_confirmed_at``."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models.enums import (
+        ApplicationSourceType,
+        ApplicationStatus,
+        EventVerificationStatus,
+    )
+    from app.services.application_service import ApplicationService
+    from tests.factories import create_job
+
+    user = _user(db_session, "agent-confirm-time@example.com")
+    job = create_job(db_session, company="预约科技", title="后端实习生")
+    service = ApplicationService(db_session, settings)
+    application = service.create(
+        user,
+        job_id=job.id,
+        job_lead_id=None,
+        external_company=None,
+        external_title=None,
+        external_url=None,
+        status=ApplicationStatus.APPLIED,
+        notes=None,
+        applied_at=None,
+    )
+    service.add_event(
+        user,
+        application.id,
+        status=ApplicationStatus.INTERVIEW,
+        event_time=datetime.now(UTC) + timedelta(days=5),
+        note=None,
+        evidence_summary="约定面试",
+        source_type=ApplicationSourceType.MANUAL,
+        source_reference=None,
+        verification_status=EventVerificationStatus.USER_REPORTED,
+    )
+
+    refreshed = service.get(user, application.id)
+    assert refreshed.last_confirmed_at is not None
+    assert refreshed.last_confirmed_at < datetime.now(UTC) + timedelta(minutes=1)
+
+
+def test_progress_timeline_marks_retired_appointments_and_keeps_active_next(
+    db_session: Session, settings: Settings
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models.enums import (
+        ApplicationSourceType,
+        ApplicationStatus,
+        EventVerificationStatus,
+    )
+    from app.services.application_service import ApplicationService
+    from tests.factories import create_job
+
+    user = _user(db_session, "retired-appointments@example.com")
+    job = create_job(db_session)
+    service = ApplicationService(db_session, settings)
+    application = service.create(
+        user,
+        job_id=job.id,
+        job_lead_id=None,
+        external_company=None,
+        external_title=None,
+        external_url=None,
+        status=ApplicationStatus.APPLIED,
+        notes=None,
+        applied_at=None,
+    )
+
+    def appointment(days, target=None):
+        return service.add_event(
+            user,
+            application.id,
+            status=ApplicationStatus.INTERVIEW,
+            event_time=datetime.now(UTC) + timedelta(days=days),
+            note=None,
+            evidence_summary=None,
+            source_type=ApplicationSourceType.MANUAL,
+            source_reference=None,
+            verification_status=EventVerificationStatus.USER_REPORTED,
+            reschedule_event_id=target,
+        )
+
+    old = appointment(1)
+    active = appointment(2, old.id)
+    cancelled = appointment(3)
+    service.cancel_event(user, application.id, cancelled.id)
+    tools = {
+        t.name: t
+        for t in build_all_tools(
+            RuntimeContext(user_id=user.id, user=user, session=db_session, settings=settings)
+        )
+    }
+    rows = tools["get_application_timeline"].invoke({"application_id": str(application.id)})[
+        "events"
+    ]
+    scheduled = [r for r in rows if r["is_scheduled"]]
+    assert len(scheduled) == 3
+    assert [r["appointment_state"] for r in scheduled] == ["inactive", "active", "inactive"]
+    assert [r["appointment"] for r in scheduled] == [False, True, False]
+    assert all(r["superseded_at"] for r in scheduled if not r["appointment"])
+    next_slot = tools["list_applications"].invoke({})["applications"][0]["next_appointment"]
+    assert datetime.fromisoformat(next_slot["starts_at"]) == active.event_time

@@ -250,6 +250,10 @@ export interface ApplicationEvent {
   evidence_summary: string | null;
   verification_status: string;
   note: string | null;
+  /** True only for explicit assessment/interview appointments. */
+  is_scheduled: boolean;
+  /** Set when the slot was rescheduled or cancelled; kept for the audit trail. */
+  superseded_at: string | null;
 }
 
 export interface ApplicationDetail extends ApplicationRecord {
@@ -330,6 +334,7 @@ export interface JobPreferences {
 }
 
 export interface Profile {
+  user_id: string;
   headline: string | null;
   education: EducationItem[];
   skills: string[];
@@ -490,8 +495,18 @@ export interface AgentRunResult {
   structured?: {
     jobs: AgentJobCard[];
     matches: AgentMatchCard[];
+    /** Matches excluded by this turn's company/city/direction constraints. */
+    extra_matches?: (AgentMatchCard & { selection_reason?: string })[];
     applications: AgentApplicationCard[];
-    progress_events: { status?: string; event_time?: string | null; source_type?: string }[];
+    progress_events: {
+      status?: string;
+      event_time?: string | null;
+      source_type?: string;
+      appointment?: boolean;
+      is_scheduled?: boolean;
+      appointment_state?: "active" | "inactive" | null;
+      superseded_at?: string | null;
+    }[];
   } | null;
 }
 

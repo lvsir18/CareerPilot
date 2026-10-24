@@ -83,6 +83,10 @@ class ApplicationStatusUpdate(BaseModel):
 class ApplicationEventCreate(BaseModel):
     status: ApplicationStatus
     event_time: datetime | None = None
+    # Explicit target preserves other rounds. Legacy boolean is accepted only
+    # when there is exactly one active appointment of this kind.
+    reschedule_event_id: UUID | None = None
+    supersede_scheduled: bool = False
     note: str | None = Field(default=None, max_length=1000)
     evidence_summary: str | None = Field(default=None, max_length=2000)
     source_reference: str | None = Field(default=None, max_length=200)
@@ -124,6 +128,8 @@ class ApplicationEventRead(BaseModel):
     evidence_summary: str | None
     verification_status: str
     note: str | None
+    is_scheduled: bool
+    superseded_at: datetime | None
 
 
 class ApplicationRead(BaseModel):
@@ -168,6 +174,8 @@ def event_to_read(event: ApplicationEvent) -> ApplicationEventRead:
         evidence_summary=event.evidence_summary,
         verification_status=event.verification_status,
         note=event.note,
+        is_scheduled=event.is_scheduled,
+        superseded_at=event.superseded_at,
     )
 
 

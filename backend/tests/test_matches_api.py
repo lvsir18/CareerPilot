@@ -158,7 +158,13 @@ def test_recommendations_cross_user_isolation(
 
         client_b = AutoCsrfTestClient(matches_app, settings)
         register_user(client_b, email="iso-b@example.com")
-        # User B has no profile confirmed yet; matching still works but is isolated.
+        # An unconfirmed (or empty) profile must not be scored anywhere.
+        blocked = client_b.post(f"/api/v1/matches/jobs/{job.id}")
+        assert blocked.status_code == 409
+        assert blocked.json()["error"]["code"] == "PROFILE_NOT_CONFIRMED"
+
+        client_b.patch("/api/v1/profile/me", json={"skills": ["Python"]})
+        client_b.post("/api/v1/profile/confirm")
         response_b = client_b.post(f"/api/v1/matches/jobs/{job.id}")
         assert response_b.status_code == 200
         assert response_b.json()["data"]["match"]["match_score"] is not None

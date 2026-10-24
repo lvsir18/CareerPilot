@@ -120,7 +120,7 @@ export function EmailImportPanel({ applications }: { applications: ApplicationRe
             系统先展示提取结果，确认后才写入时间线。
           </p>
         </div>
-        <StatusPill tone="info">M2-R2 · 人工确认</StatusPill>
+        <StatusPill tone="info">导入后需人工确认</StatusPill>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">

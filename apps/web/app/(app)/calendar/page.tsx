@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarClock, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { CalendarClock, CalendarPlus, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { getCalendarEvents } from "@/lib/client-api";
@@ -149,24 +149,33 @@ export default function CalendarPage() {
             这里只显示已明确的笔试/面试预约时间。投递、初筛等状态变更请到申请的进度时间线查看。
           </p>
         </div>
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
-          {[
-            { key: "month", label: "月" },
-            { key: "week", label: "周" },
-            { key: "list", label: "列表" },
-          ].map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setView(item.key as View)}
-              aria-pressed={view === item.key}
-              className={`rounded-md px-3 py-1 text-xs ${
-                view === item.key ? "bg-slate-900 text-white" : "text-slate-600"
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/applications"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-400"
+          >
+            <CalendarPlus className="size-3.5" aria-hidden />
+            登记预约
+          </Link>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+            {[
+              { key: "month", label: "月" },
+              { key: "week", label: "周" },
+              { key: "list", label: "列表" },
+            ].map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setView(item.key as View)}
+                aria-pressed={view === item.key}
+                className={`rounded-md px-3 py-1 text-xs ${
+                  view === item.key ? "bg-slate-900 text-white" : "text-slate-600"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -274,7 +283,13 @@ export default function CalendarPage() {
               </li>
             ))
           ) : (
-            <li className="py-6 text-center text-sm text-slate-500">暂无已确认的笔试/面试时间</li>
+            <li className="py-6 text-center text-sm text-slate-500">
+              暂无已确认的笔试/面试时间。可以在
+              <Link href="/applications" className="mx-1 text-sky-700 hover:underline">
+                投递看板
+              </Link>
+              打开某条申请后手工登记。
+            </li>
           )}
         </ul>
       </section>

@@ -6,7 +6,7 @@ import { ArrowLeft, ArrowUpRight, CircleAlert, MapPin } from "lucide-react";
 import { JobActions } from "@/components/job-actions";
 import { JobMatchPanel } from "@/components/job-match-panel";
 import { StatusPill } from "@/components/status-pill";
-import { fetchJob } from "@/lib/api";
+import { fetchJob, fetchSavedJobs } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import {
   formatJobStatus,
@@ -35,7 +35,14 @@ export default async function JobDetailPage({
 }) {
   const { id } = await params;
   const cookie = (await cookies()).toString();
-  const result = await fetchJob(id, cookie);
+  // Save state is a page-level fact: the sidebar button must offer "取消收藏"
+  // on a job the user already saved, not a second "收藏".
+  const [result, savedResult] = await Promise.all([
+    fetchJob(id, cookie),
+    fetchSavedJobs(cookie, { list_type: "saved", page_size: 50 }),
+  ]);
+  const isSaved =
+    savedResult.ok && savedResult.data.data.some((item) => item.job.id === id);
 
   if (!result.ok) {
     if (result.error.status === 404) {
@@ -178,7 +185,7 @@ export default async function JobDetailPage({
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-sm font-semibold text-slate-900">操作</h2>
             <div className="mt-4">
-              <JobActions jobId={job.id} />
+              <JobActions jobId={job.id} saved={isSaved} />
             </div>
           </section>
 

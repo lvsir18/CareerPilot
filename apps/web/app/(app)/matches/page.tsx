@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight, Check, Star } from "lucide-react";
+import { ArrowUpRight, Check, ShieldAlert, Star, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { createApplication, getRecommendations, saveJob } from "@/lib/client-api";
+import {
+  createApplication,
+  getRecommendations,
+  saveJob,
+  unsaveJob,
+} from "@/lib/client-api";
 import type { RecommendationItem } from "@/lib/api";
 import {
   formatApplicationStatus,
@@ -18,22 +23,32 @@ function eligibilityTone(status: string): string {
   return "bg-slate-50 text-slate-600 ring-slate-200";
 }
 
+type PageState = "loading" | "need_confirm" | "error" | "ready";
+
 export default function MatchesPage() {
   const [items, setItems] = useState<RecommendationItem[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [state, setState] = useState<PageState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [onlyEligible, setOnlyEligible] = useState(true);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function refresh() {
-    setBusy(true);
+    setState("loading");
     setError(null);
     const result = await getRecommendations({ exclude_applied: false });
-    setBusy(false);
     if (!result.ok) {
+      if (result.error.code === "PROFILE_NOT_CONFIRMED") {
+        setState("need_confirm");
+        return;
+      }
       setError(result.error.message);
+      setState("error");
       return;
     }
     setItems(Array.isArray(result.data) ? result.data : []);
+    setState("ready");
   }
 
   useEffect(() => {
@@ -41,14 +56,34 @@ export default function MatchesPage() {
     void refresh();
   }, []);
 
-  async function handleSave(jobId: string) {
-    await saveJob(jobId, "saved");
+  /** Every write reports its outcome: a silent 503 looked like a saved job. */
+  async function runAction(key: string, action: () => Promise<{ ok: boolean; error?: { message: string } }>) {
+    setPendingAction(key);
+    setActionError(null);
+    setActionNotice(null);
+    const result = await action();
+    setPendingAction(null);
+    if (!result.ok) {
+      setActionError(result.error?.message ?? "操作失败，请重试");
+      return false;
+    }
     await refresh();
+    return true;
+  }
+
+  async function handleSave(jobId: string) {
+    const ok = await runAction(`${jobId}:save`, () => saveJob(jobId, "saved"));
+    if (ok) setActionNotice("已加入收藏，可在「我的收藏」里取消。");
+  }
+
+  async function handleUnsave(jobId: string) {
+    const ok = await runAction(`${jobId}:unsave`, () => unsaveJob(jobId, "saved"));
+    if (ok) setActionNotice("已取消收藏。");
   }
 
   async function handleApply(jobId: string) {
-    await createApplication(jobId);
-    await refresh();
+    const ok = await runAction(`${jobId}:apply`, () => createApplication(jobId));
+    if (ok) setActionNotice("已登记申请进度，可在投递看板继续维护状态。");
   }
 
   const ineligibleCount = useMemo(
@@ -78,18 +113,65 @@ export default function MatchesPage() {
             只看符合我资格的岗位（已隐藏 {onlyEligible ? ineligibleCount : 0} 个不满足硬性条件的推荐）
           </label>
         ) : null}
-        {error ? <p className="mt-3 break-words text-sm text-rose-700">{error}</p> : null}
+        {actionError ? (
+          <p role="alert" className="mt-3 break-words rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            {actionError}
+          </p>
+        ) : null}
+        {actionNotice ? (
+          <p role="status" className="mt-3 break-words rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            {actionNotice}
+          </p>
+        ) : null}
       </section>
 
-      {visibleItems.length === 0 ? (
+      {state === "need_confirm" ? (
+        <section className="rounded-xl border border-sky-200 bg-sky-50 p-5">
+          <h2 className="text-sm font-semibold text-sky-900">先确认画像，才能给出匹配</h2>
+          <p className="mt-1 text-xs leading-relaxed text-sky-800">
+            推荐和岗位详情使用同一套规则：只有确认过的画像才会参与匹配。
+            未确认时不会给出分数，也不会把草稿当作已确认画像。
+          </p>
+          <Link
+            href="/profile"
+            className="mt-3 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+          >
+            去确认画像
+          </Link>
+        </section>
+      ) : null}
+
+      {state === "error" ? (
+        <section className="rounded-xl border border-rose-200 bg-rose-50 p-5">
+          <p className="flex items-center gap-2 break-words text-sm text-rose-700">
+            <ShieldAlert className="size-4 shrink-0" aria-hidden />
+            {error ?? "推荐加载失败"}
+          </p>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700"
+          >
+            重新加载
+          </button>
+        </section>
+      ) : null}
+
+      {state === "ready" && visibleItems.length === 0 ? (
         <p className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          {busy
-            ? "计算中..."
-            : items.length > 0
-              ? "当前筛选下没有符合资格的推荐，可以取消勾选查看全部。"
-              : "暂无推荐。请先上传简历、确认画像，或等待已核验岗位产生。"}
+          {items.length > 0
+            ? "当前筛选下没有符合资格的推荐，可以取消勾选查看全部。"
+            : "暂无推荐。请先上传简历、确认画像，或等待已核验岗位产生。"}
         </p>
-      ) : (
+      ) : null}
+
+      {state === "loading" ? (
+        <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+          计算中...
+        </p>
+      ) : null}
+
+      {state === "ready" && visibleItems.length > 0 ? (
         <div className="space-y-4">
           {visibleItems.map((item) => (
             <article
@@ -198,32 +280,42 @@ export default function MatchesPage() {
                   查看官网
                   <ArrowUpRight className="size-3" aria-hidden />
                 </a>
-                {!item.saved ? (
+                {item.saved ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleUnsave(item.job.id)}
+                    disabled={pendingAction !== null}
+                    className="inline-flex items-center gap-1 text-slate-500 hover:text-rose-600 disabled:opacity-50"
+                  >
+                    <X className="size-3" aria-hidden />
+                    {pendingAction === `${item.job.id}:unsave` ? "取消中…" : "取消收藏"}
+                  </button>
+                ) : (
                   <button
                     type="button"
                     onClick={() => void handleSave(item.job.id)}
-                    className="inline-flex items-center gap-1 text-slate-700 hover:underline"
+                    disabled={pendingAction !== null}
+                    className="inline-flex items-center gap-1 text-slate-700 hover:underline disabled:opacity-50"
                   >
                     <Star className="size-3" aria-hidden />
-                    收藏
+                    {pendingAction === `${item.job.id}:save` ? "收藏中…" : "收藏"}
                   </button>
-                ) : (
-                  <span className="text-slate-400">已收藏</span>
                 )}
                 {!item.applied_status ? (
                   <button
                     type="button"
                     onClick={() => void handleApply(item.job.id)}
-                    className="text-slate-700 hover:underline"
+                    disabled={pendingAction !== null}
+                    className="text-slate-700 hover:underline disabled:opacity-50"
                   >
-                    登记申请进度
+                    {pendingAction === `${item.job.id}:apply` ? "登记中…" : "登记申请进度"}
                   </button>
                 ) : null}
               </div>
             </article>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

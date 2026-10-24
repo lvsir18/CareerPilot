@@ -14,6 +14,7 @@ import {
   type AgentThread,
   type ApiResult,
   type ApplicationDetail,
+  type ApplicationEvent,
   type ApplicationImportPreview,
   type ApplicationRecord,
   type DashboardCalendar,
@@ -230,12 +231,26 @@ export function addApplicationEvent(
     note?: string;
     evidence_summary?: string;
     source_reference?: string;
+    /** Retire only the selected appointment; preserve other rounds. */
+    reschedule_event_id?: string;
+    /** Legacy: allowed only if one active appointment of this kind exists. */
+    supersede_scheduled?: boolean;
   },
-): Promise<ApiResult<unknown>> {
-  return request(`/api/v1/applications/${applicationId}/events`, {
+): Promise<ApiResult<ApplicationEvent>> {
+  return request<ApplicationEvent>(`/api/v1/applications/${applicationId}/events`, {
     method: "POST",
     body: payload,
   });
+}
+
+export function cancelApplicationEvent(
+  applicationId: string,
+  eventId: string,
+): Promise<ApiResult<ApplicationEvent>> {
+  return request<ApplicationEvent>(
+    `/api/v1/applications/${applicationId}/events/${eventId}/cancel`,
+    { method: "POST", body: {} },
+  );
 }
 
 export function updateApplicationStatus(

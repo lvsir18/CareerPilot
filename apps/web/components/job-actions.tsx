@@ -1,15 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { BookmarkPlus, ClipboardList } from "lucide-react";
+import { BookmarkPlus, ClipboardList, StarOff } from "lucide-react";
 
-import { saveJob } from "@/lib/client-api";
+import { saveJob, unsaveJob } from "@/lib/client-api";
 
-type PendingAction = "saved" | "to_apply" | null;
+type PendingAction = "saved" | "to_apply" | "unsave" | null;
 
-export function JobActions({ jobId }: { jobId: string }) {
+export function JobActions({ jobId, saved }: { jobId: string; saved: boolean }) {
+  const router = useRouter();
   const [pending, setPending] = useState<PendingAction>(null);
+  const [isSaved, setIsSaved] = useState(saved);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,26 +25,55 @@ export function JobActions({ jobId }: { jobId: string }) {
     if (!result.ok) {
       setError(result.error.message);
     } else {
+      if (listType === "saved") setIsSaved(true);
       setMessage(
         listType === "saved"
           ? "已加入收藏（重复操作不会产生重复记录）。"
           : "已加入待投递清单，可在投递看板中记录进度。",
       );
+      router.refresh();
+    }
+    setPending(null);
+  }
+
+  async function handleUnsave() {
+    setPending("unsave");
+    setError(null);
+    setMessage(null);
+    const result = await unsaveJob(jobId, "saved");
+    if (!result.ok) {
+      setError(result.error.message);
+    } else {
+      setIsSaved(false);
+      setMessage("已从收藏中移除。");
+      router.refresh();
     }
     setPending(null);
   }
 
   return (
     <div className="space-y-3">
-      <button
-        type="button"
-        onClick={() => handleSave("saved")}
-        disabled={pending !== null}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900 disabled:opacity-60"
-      >
-        <BookmarkPlus className="size-4" aria-hidden />
-        {pending === "saved" ? "处理中…" : "收藏岗位"}
-      </button>
+      {isSaved ? (
+        <button
+          type="button"
+          onClick={handleUnsave}
+          disabled={pending !== null}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-rose-300 hover:text-rose-700 disabled:opacity-60"
+        >
+          <StarOff className="size-4" aria-hidden />
+          {pending === "unsave" ? "处理中…" : "取消收藏"}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => handleSave("saved")}
+          disabled={pending !== null}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900 disabled:opacity-60"
+        >
+          <BookmarkPlus className="size-4" aria-hidden />
+          {pending === "saved" ? "处理中…" : "收藏岗位"}
+        </button>
+      )}
       <button
         type="button"
         onClick={() => handleSave("to_apply")}

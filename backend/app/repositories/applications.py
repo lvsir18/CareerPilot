@@ -111,6 +111,14 @@ class ApplicationRepository:
             )
         )
 
+    def get_event(self, application_id: UUID, event_id: UUID) -> ApplicationEvent | None:
+        return self._session.scalar(
+            select(ApplicationEvent).where(
+                ApplicationEvent.application_id == application_id,
+                ApplicationEvent.id == event_id,
+            )
+        )
+
     def add(self, row: Application) -> None:
         self._session.add(row)
 

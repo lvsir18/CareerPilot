@@ -37,14 +37,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
         # Prepare the LangGraph checkpointer once at startup so per-request
-        # setup never races on CONCURRENTLY index creation.
-        try:
-            from app.agents.checkpoint import checkpoint_saver
+        # setup never races on CONCURRENTLY index creation. Skipped in tests:
+        # the fixture keeps an open transaction, which makes ``CREATE INDEX
+        # CONCURRENTLY`` wait forever instead of exercising the API.
+        if settings.app_env != "test":
+            try:
+                from app.agents.checkpoint import checkpoint_saver
 
-            with checkpoint_saver(settings):
-                pass
-        except Exception:  # agent stays available; checkpointer errors surface per-request
-            logger.warning("agent_checkpoint_setup_failed", exc_info=True)
+                with checkpoint_saver(settings):
+                    pass
+            except Exception:  # agent stays available; checkpointer errors surface per-request
+                logger.warning("agent_checkpoint_setup_failed", exc_info=True)
         yield
         dispose_engine()
         close_redis()

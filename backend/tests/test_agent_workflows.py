@@ -212,3 +212,177 @@ def test_hitl_resume_worker_respects_decision_and_confirmation(
         else:
             assert calls == []
             assert resumed_events[-1] == "approval.required"
+
+
+def test_understand_resets_previous_turn_results(settings) -> None:
+    """UX3-09: a new question must not inherit the last turn's tool results."""
+    from app.agents.supervisor import _understand
+
+    node = _understand(ScriptedModel("profile_query"))
+    state = {
+        "messages": [HumanMessage(content="只列出我的技术技能")],
+        "tool_results": [{"tool": "list_applications", "data": {"total": 1}}],
+        "agent_results": {"progress": "上一轮的答案"},
+        "errors": ["list_applications: 旧错误"],
+        "final_answer": "上一轮结论",
+    }
+
+    update = node(state)
+
+    assert update["tool_results"] == []
+    assert update["agent_results"] == {}
+    assert update["errors"] == []
+    assert update["final_answer"] is None
+
+
+def test_answer_facts_only_carries_progress_tools() -> None:
+    """The summarizer gets deterministic progress facts, not giant job payloads."""
+    from app.agents.supervisor import _answer_facts
+
+    facts = _answer_facts(
+        [
+            {"tool": "list_applications", "data": {"total": 1, "applications": []}},
+            {"tool": "search_jobs", "data": {"jobs": [{"title": "x"}] * 50}},
+            {"tool": "get_application_timeline", "data": {"events": []}},
+        ]
+    )
+
+    assert [item["tool"] for item in facts] == [
+        "list_applications",
+        "get_application_timeline",
+    ]
+
+
+def test_matches_are_split_by_the_users_own_constraints() -> None:
+    """UX3-04/O-03: the cards must honour company/city/direction, not just eligibility."""
+    from app.agents.supervisor import _split_matches
+
+    def entry(company: str, title: str, city: str) -> dict:
+        return {"job": {"company": company, "title": title, "city": city}, "match": {}}
+
+    tool_results = [
+        {
+            "tool": "recommend_jobs",
+            "data": {
+                "items": [
+                    entry("百度", "测试开发工程师（实习生）", "北京"),
+                    entry("百度", "数据仓库开发实习生", "北京"),
+                    entry("百度", "商家运营实习生", "北京"),
+                    entry("字节跳动", "测试开发实习生", "北京"),
+                ]
+            },
+        }
+    ]
+    constraints = {
+        "companies": ["百度"],
+        "cities": ["北京"],
+        "keywords": ["测试开发", "后端"],
+    }
+
+    output = _split_matches(tool_results, constraints)
+
+    kept = [entry["job"]["title"] for item in output for entry in (item["data"].get("items") or [])]
+    parked = {
+        entry["job"]["title"]: entry["selection_reason"]
+        for item in output
+        for entry in (item["data"].get("extra_items") or [])
+    }
+    assert kept == ["测试开发工程师（实习生）"]
+    assert parked["数据仓库开发实习生"] == "不在本轮限定的岗位方向"
+    assert parked["商家运营实习生"] == "不在本轮限定的岗位方向"
+    assert parked["测试开发实习生"] == "不在本轮限定的企业范围"
+
+
+def test_match_split_is_a_noop_without_constraints() -> None:
+    from app.agents.supervisor import _split_matches
+
+    tool_results = [{"tool": "recommend_jobs", "data": {"items": [{"job": {"title": "运营"}}]}}]
+    assert _split_matches(tool_results, {}) == tool_results
+
+
+def test_single_job_match_follows_the_same_scope() -> None:
+    from app.agents.supervisor import _split_matches
+
+    tool_results = [
+        {
+            "tool": "match_job",
+            "data": {
+                "job": {"company": "百度", "title": "商家运营实习生", "city": "北京"},
+                "match": {},
+            },
+        }
+    ]
+
+    output = _split_matches(tool_results, {"companies": ["百度"], "keywords": ["后端"]})
+
+    assert [item["tool"] for item in output] == ["recommend_jobs"]
+    assert output[0]["data"]["items"] == []
+    assert output[0]["data"]["extra_items"][0]["selection_reason"] == "不在本轮限定的岗位方向"
+
+
+def test_match_summary_separates_included_from_excluded() -> None:
+    from app.agents.supervisor import _match_summary
+
+    tool_results = [
+        {
+            "tool": "recommend_jobs",
+            "data": {
+                "items": [
+                    {
+                        "job": {"company": "百度", "title": "后端开发实习生", "city": "北京"},
+                        "match": {"match_score": 72, "eligibility_status": "eligible"},
+                    }
+                ]
+            },
+        },
+        {
+            "tool": "recommend_jobs",
+            "data": {
+                "items": [],
+                "extra_items": [
+                    {
+                        "job": {"title": "商家运营实习生"},
+                        "selection_reason": "不在本轮限定的岗位方向",
+                    },
+                    {
+                        "job": {"title": "数据仓库实习生"},
+                        "selection_reason": "不在本轮限定的岗位方向",
+                    },
+                ],
+            },
+        },
+    ]
+
+    included, excluded = _match_summary(tool_results)
+
+    assert [item["title"] for item in included] == ["后端开发实习生"]
+    assert included[0]["match_score"] == 72
+    assert excluded == 2
+
+
+def test_single_job_result_reaches_answer_and_cards() -> None:
+    from app.agents.service import _structure_tool_results
+    from app.agents.supervisor import _aggregate
+
+    entry = {
+        "job": {"company": "百度", "city": "北京", "title": "测试开发实习生"},
+        "match": {"match_score": 72, "eligibility_status": "eligible"},
+    }
+    payloads = []
+
+    def answer(messages):
+        payload = json.loads(messages[-1].content)
+        payloads.append(payload)
+        return AIMessage(content=f"匹配 {payload['matches'][0]['match_score']} 分")
+
+    result = _aggregate(SimpleNamespace(invoke=answer))(
+        {
+            "messages": [HumanMessage(content="只匹配百度北京测试开发")],
+            "intent": "job_match",
+            "constraints": {"companies": ["百度"], "cities": ["北京"], "keywords": ["测试开发"]},
+            "tool_results": [{"tool": "match_job", "data": entry}],
+        }
+    )
+    assert result["final_answer"] == "匹配 72 分"
+    assert payloads[0]["matches"][0]["title"] == entry["job"]["title"]
+    assert _structure_tool_results(result["tool_results"])["matches"] == [entry]

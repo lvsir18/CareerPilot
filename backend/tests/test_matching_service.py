@@ -37,6 +37,7 @@ def _job(**overrides) -> Job:
 
 def _profile(**overrides) -> ProfileRead:
     values = {
+        "user_id": uuid4(),
         "headline": None,
         "education": [],
         "skills": ["Python", "PyTorch", "Transformer", "大语言模型", "LoRA", "RAG"],

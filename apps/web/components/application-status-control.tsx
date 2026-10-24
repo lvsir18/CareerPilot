@@ -9,9 +9,12 @@ import { APPLICATION_STATUS_OPTIONS, formatApplicationStatus } from "@/lib/job-d
 export function ApplicationStatusControl({
   applicationId,
   currentStatus,
+  onChanged,
 }: {
   applicationId: string;
   currentStatus: string;
+  /** Lets the detail page reload its header and timeline after a save. */
+  onChanged?: () => void;
 }) {
   const router = useRouter();
   const [value, setValue] = useState(currentStatus);
@@ -28,6 +31,10 @@ export function ApplicationStatusControl({
     if (!result.ok) {
       setValue(previous);
       setError(result.error.message);
+    } else if (onChanged) {
+      // The select alone is not the source of truth: the header text and the
+      // timeline would otherwise keep showing the old status.
+      onChanged();
     } else {
       router.refresh();
     }

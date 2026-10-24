@@ -121,7 +121,7 @@ make e2e         # Playwright（需先启动服务）
 ```
 
 - 后端测试会自动创建 `careerpilot_test`（可用 `TEST_DATABASE_URL` 覆盖）、重置 schema 并跑真实 Alembic 迁移。
-- 当前基线：后端 pytest **238 passed**、前端 Vitest **34 passed**、Playwright agent-cards 通过。
+- 当前基线（最近一次完整运行）：后端 pytest **286 passed**、前端 Vitest **40 passed**、Playwright agent-cards 通过；用例数会随迭代增加，以实际运行结果为准。
 - `ruff format .` 是**格式化**命令，`make lint` 只做检查；改完记得本地格式化再提交。
 
 环境变量是 pydantic Settings 单例，测试里用 `monkeypatch.setattr(settings, ...)`，不要重新 import。
@@ -220,6 +220,7 @@ make e2e         # Playwright（需先启动服务）
 
 ## 12. 文档索引
 
+- 使用者手册：`docs/USER_GUIDE.md`
 - 状态总览：`docs/IMPLEMENTATION_STATUS.md`
 - 搜索与核验：`docs/M2_CHINA_JOB_SOURCES.md`、`docs/M2_R3_2_JD_VERIFICATION.md`、`docs/M2_R3_SEARCH_EVALUATION.md`
 - 画像与匹配：`docs/M3_ARCHITECTURE.md`、`docs/M3_MATCHING_DESIGN.md`、`docs/M3_EVALUATION.md`

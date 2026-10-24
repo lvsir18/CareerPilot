@@ -9,14 +9,19 @@ from __future__ import annotations
 
 import functools
 import inspect
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.agents.runtime import RunCancelled, RuntimeContext
 from app.core.errors import AppError
+from app.db.models.application import Application
+from app.db.models.job import Job
 from app.schemas.applications import application_staleness
 from app.services.application_service import ApplicationService
 from app.services.job_discovery_service import JobDiscoveryService
@@ -80,6 +85,26 @@ def _lead_brief(lead: Any) -> dict[str, Any]:
         "published_date": published.isoformat() if published else None,
         "last_seen_at": last_seen.isoformat() if last_seen else None,
     }
+
+
+_BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+def _local_label(value: datetime | None) -> str | None:
+    """Render an instant in the user's timezone so the model never converts.
+
+    The agent used to echo the raw UTC wall clock and call it "北京时间", which
+    is exactly the kind of arithmetic a tool should do instead of a model.
+    """
+    if value is None:
+        return None
+    return value.astimezone(_BEIJING).strftime("%Y-%m-%d %H:%M") + "（北京时间）"
+
+
+def _local_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(_BEIJING).isoformat()
 
 
 def build_job_tools(ctx: RuntimeContext) -> list:
@@ -297,6 +322,27 @@ def build_profile_tools(ctx: RuntimeContext) -> list:
 def build_progress_tools(ctx: RuntimeContext) -> list:
     service = ApplicationService(ctx.session, ctx.settings)
 
+    def _next_appointment(app: Application) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        upcoming = [
+            event
+            for event in app.events
+            if getattr(event, "is_scheduled", False)
+            and getattr(event, "superseded_at", None) is None
+            and event.event_time is not None
+            and event.event_time >= now
+        ]
+        if not upcoming:
+            return None
+        soonest = min(upcoming, key=lambda event: event.event_time)
+        return {
+            "status": soonest.to_status.value,
+            "starts_at": _local_iso(soonest.event_time),
+            # Pre-rendered: the model used to echo the UTC wall clock and call it
+            # "北京时间", so the conversion happens here instead of in the prompt.
+            "starts_at_label": _local_label(soonest.event_time),
+        }
+
     @tool("list_applications")
     @_safe_tool(ctx)
     def list_applications(company: str | None = None) -> dict[str, Any]:
@@ -312,6 +358,11 @@ def build_progress_tools(ctx: RuntimeContext) -> list:
             rows.append(
                 {
                     "id": str(app.id),
+                    # Every identifier a follow-up tool may need, so the model
+                    # never has to guess which id an API expects.
+                    "application_id": str(app.id),
+                    "job_id": str(app.job.id) if app.job is not None else None,
+                    "job_no": app.job.source_job_id if app.job is not None else None,
                     "company": (app.job.company.name if app.job else app.external_company),
                     "title": (app.job.title if app.job else app.external_title),
                     "status": app.status.value,
@@ -319,46 +370,122 @@ def build_progress_tools(ctx: RuntimeContext) -> list:
                     "last_confirmed_at": (
                         app.last_confirmed_at.isoformat() if app.last_confirmed_at else None
                     ),
+                    "next_appointment": _next_appointment(app),
                     "needs_review": needs_review,
                     "stale_days": stale_days,
                 }
             )
-        return {"total": len(rows), "applications": rows}
+        return {"total": len(rows), "applications": rows, "timezone": "Asia/Shanghai"}
 
     @tool("get_application_timeline")
     @_safe_tool(ctx)
     def get_application_timeline(application_id: str) -> dict[str, Any]:
         """读取某条申请的状态时间线与事件证据。"""
-        events = service.events(ctx.user, UUID(application_id))
-        return {
-            "events": [
+        try:
+            app_uuid = UUID(application_id)
+        except (TypeError, ValueError):
+            return {
+                "error": "INVALID_APPLICATION_ID",
+                "message": "需要申请 id（UUID）。可先用 list_applications 查询 application_id。",
+            }
+        events = service.events(ctx.user, app_uuid)
+        rows: list[dict[str, Any]] = []
+        for event in events:
+            scheduled = bool(getattr(event, "is_scheduled", False))
+            superseded_at = getattr(event, "superseded_at", None)
+            active = scheduled and superseded_at is None
+            rows.append(
                 {
                     # ``ApplicationEvent`` exposes ``to_status``; ``new_status``
                     # never existed and made the timeline tool always fail.
                     "status": event.to_status.value,
+                    "appointment": active,
+                    "is_scheduled": scheduled,
+                    "appointment_state": "active" if active else "inactive" if scheduled else None,
+                    "superseded_at": _local_iso(superseded_at),
+                    # Appointment slot vs. the moment it was recorded: only the
+                    # former is a calendar item, and both are pre-localised.
+                    "starts_at": _local_iso(event.event_time) if scheduled else None,
+                    "starts_at_label": _local_label(event.event_time) if scheduled else None,
+                    "recorded_at": _local_label(event.created_at),
                     "event_time": event.event_time.isoformat() if event.event_time else None,
-                    "scheduled": bool(getattr(event, "is_scheduled", False)),
                     "source_type": event.source_type,
                     "evidence_type": event.evidence_type,
                     "summary": (event.evidence_summary or "")[:300],
                 }
-                for event in events
-            ]
+            )
+        return {
+            "application_id": str(app_uuid),
+            "events": rows,
+            "timezone": "Asia/Shanghai",
         }
 
     @tool("check_job_application_status")
     @_safe_tool(ctx)
-    def check_job_application_status(job_id: str) -> dict[str, Any]:
-        """查询某个岗位是否已申请及当前状态。"""
+    def check_job_application_status(identifier: str) -> dict[str, Any]:
+        """查询某个岗位是否已申请及当前状态。
+
+        identifier 支持三种值：本账号申请 id、内部岗位 UUID、来源编号
+        （source_job_id，通常是官网详情链接里的数字串或 UUID）。
+        标题里的展示编号（如「（J106720）」）不一定等于来源编号，若查不到会返回
+        IDENTIFIER_NOT_RECOGNIZED，此时应先 list_applications 取真实 id，不要把
+        查不到说成「未申请」。
+        """
+        target = (identifier or "").strip()
+        if not target:
+            return {
+                "error": "IDENTIFIER_REQUIRED",
+                "message": "需要申请 id、岗位 UUID 或官网岗位编号",
+            }
         applications, _total = service.list(
             ctx.user, status=None, company=None, query=None, page=1, page_size=200
         )
         for app in applications:
-            if app.job is not None and str(app.job.id) == job_id:
-                return {"applied": True, "status": app.status.value, "application_id": str(app.id)}
-        return {"applied": False, "status": None}
+            candidates = {str(app.id)}
+            if app.job is not None:
+                candidates.add(str(app.job.id))
+                if app.job.source_job_id:
+                    candidates.add(app.job.source_job_id.strip())
+            if target in candidates:
+                return {
+                    "applied": True,
+                    "status": app.status.value,
+                    "application_id": str(app.id),
+                    "job_id": str(app.job.id) if app.job is not None else None,
+                    "job_no": app.job.source_job_id if app.job is not None else None,
+                }
+        job = _find_job(ctx, target)
+        if job is not None:
+            return {
+                "applied": False,
+                "status": None,
+                "job_id": str(job.id),
+                "job_no": job.source_job_id,
+                "company": job.company,
+                "title": job.title,
+                "message": "该岗位在你的记录中还没有申请",
+            }
+        return {
+            "error": "IDENTIFIER_NOT_RECOGNIZED",
+            "message": (
+                "无法识别该编号：请使用 list_applications 返回的 application_id、"
+                "job_id 或 job_no，不要用其它数字推断申请状态。"
+            ),
+        }
 
     return [list_applications, get_application_timeline, check_job_application_status]
+
+
+def _find_job(ctx: RuntimeContext, identifier: str) -> Job | None:
+    """Resolve a job by internal UUID or by its official posting number."""
+    statement = select(Job)
+    try:
+        job_id = UUID(identifier)
+    except (TypeError, ValueError):
+        statement = statement.where(Job.source_job_id == identifier)
+    else:
+        statement = statement.where(Job.id == job_id)
+    return ctx.session.execute(statement.limit(1)).scalar_one_or_none()
 
 
 def _safe_tool(ctx: RuntimeContext):

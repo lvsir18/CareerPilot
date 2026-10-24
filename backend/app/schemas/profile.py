@@ -63,6 +63,9 @@ class JobPreferences(BaseModel):
 
 
 class ProfileRead(BaseModel):
+    # Drafts and other client-side state are scoped per account, so the client
+    # needs a stable owner id it cannot guess from another session.
+    user_id: UUID
     headline: str | None
     education: list[EducationItem]
     skills: list[str]

@@ -33,6 +33,7 @@ def _structure_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, lis
     structured: dict[str, list[Any]] = {
         "jobs": [],
         "matches": [],
+        "extra_matches": [],
         "applications": [],
         "progress_events": [],
     }
@@ -48,6 +49,7 @@ def _structure_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, lis
             structured["jobs"].append(data)
         elif tool == "recommend_jobs":
             structured["matches"].extend(data.get("items") or [])
+            structured["extra_matches"].extend(data.get("extra_items") or [])
         elif tool == "match_job":
             structured["matches"].append(data)
         elif tool == "list_applications":

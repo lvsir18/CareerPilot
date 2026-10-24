@@ -118,6 +118,30 @@ export function JobDiscoveryPanel() {
   const [pendingVerify, setPendingVerify] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [officialKeyword, setOfficialKeyword] = useState(() => readUrlFilter("q") ?? "");
+
+  // Hand-off carries the filters the user just chose; otherwise the Agent
+  // silently widened the search to every company and city.
+  // Every selected company is transmitted; truncating here dropped real search
+  // constraints (a 10-company default became 5).
+  const handedOffFilters = [
+    companies.length ? `企业：${companies.map(formatCompany).join("、")}` : "",
+    city ? `城市：${city}` : "",
+    jobType ? `类型：${JOB_TYPES.find((item) => item.value === jobType)?.label ?? jobType}` : "",
+    jobFamily
+      ? `方向：${JOB_FAMILIES.find((item) => item.value === jobFamily)?.label ?? jobFamily}`
+      : "",
+  ].filter(Boolean);
+  const agentQuery = [
+    query ? `关键词「${query}」` : "",
+    ...handedOffFilters,
+  ]
+    .filter(Boolean)
+    .join("；");
+  const agentHref = `/agent?q=${encodeURIComponent(
+    agentQuery
+      ? `帮我找岗位：${agentQuery}。请沿用这些条件，不要扩大范围。`
+      : "帮我找实习岗位",
+  )}`;
   const [officialCompanies, setOfficialCompanies] = useState<string[]>(["tencent"]);
   const [tencentProject, setTencentProject] = useState("日常实习");
   const [officialBusy, setOfficialBusy] = useState(false);
@@ -354,16 +378,18 @@ export function JobDiscoveryPanel() {
           <Link href="/matches" className="text-sm text-sky-700 hover:underline">
             匹配我的简历
           </Link>
-          <Link
-            href={`/agent?q=${encodeURIComponent(query ? `帮我找${query}岗位` : "帮我找实习岗位")}`}
-            className="text-sm text-sky-700 hover:underline"
-          >
+          <Link href={agentHref} className="text-sm text-sky-700 hover:underline">
             询问 Agent
           </Link>
           <Link href="/import" className="text-sm text-sky-700 hover:underline">
             手动导入官方链接 / JD
           </Link>
         </div>
+        {agentQuery ? (
+          <p className="mt-2 break-words text-[11px] text-slate-500">
+            询问 Agent 时会带上：{agentQuery}
+          </p>
+        ) : null}
         {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
       </section>
 

@@ -217,6 +217,9 @@ def dashboard_calendar(
                 # to "now" when someone flips a status, so only events flagged as
                 # explicitly scheduled may reach the calendar.
                 ApplicationEvent.is_scheduled.is_(True),
+                # A rescheduled or cancelled appointment stays in the timeline but
+                # must not occupy a future slot next to its replacement.
+                ApplicationEvent.superseded_at.is_(None),
                 ApplicationEvent.to_status.in_(_CALENDAR_STATUSES),
             )
             .order_by(ApplicationEvent.event_time.asc(), ApplicationEvent.created_at.asc())

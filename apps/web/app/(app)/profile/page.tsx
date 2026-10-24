@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { confirmProfile, getProfile, updateProfile } from "@/lib/client-api";
+import { draftKey } from "@/lib/profile-draft";
 import type { Profile } from "@/lib/api";
 
 const JOB_FAMILIES = [
@@ -115,6 +116,21 @@ function isBlank(profile: Profile): boolean {
 const inputClass =
   "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100";
 
+
+interface FormSnapshot {
+  headline: string;
+  skills: string;
+  education: EducationDraft[];
+  experiences: ExperienceDraft[];
+  projects: ProjectDraft[];
+  targetRoles: string[];
+  cities: string;
+  jobTypes: string[];
+  graduationYear: string;
+}
+
+
+
 export default function ProfilePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState<"loading" | "error" | "ready">("loading");
@@ -133,6 +149,35 @@ export default function ProfilePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Signature of the last stored profile, compared with the live form so an
+  // unsaved edit is never silently dropped when the user navigates away.
+  const [savedCopy, setSavedCopy] = useState<string | null>(null);
+
+  const currentForm: FormSnapshot = {
+    headline,
+    skills,
+    education,
+    experiences,
+    projects,
+    targetRoles,
+    cities,
+    jobTypes,
+    graduationYear,
+  };
+  const signature = JSON.stringify(currentForm);
+  const dirty = savedCopy !== null && signature !== savedCopy;
+
+  function applySnapshot(snapshot: FormSnapshot) {
+    setHeadline(snapshot.headline);
+    setSkills(snapshot.skills);
+    setEducation(snapshot.education);
+    setExperiences(snapshot.experiences);
+    setProjects(snapshot.projects);
+    setTargetRoles(snapshot.targetRoles);
+    setCities(snapshot.cities);
+    setJobTypes(snapshot.jobTypes);
+    setGraduationYear(snapshot.graduationYear);
+  }
 
   const hydrate = useCallback((data: Profile) => {
     setProfile(data);
@@ -164,6 +209,72 @@ export default function ProfilePage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch then setState
     void load();
   }, [load]);
+
+  // Snapshot the stored profile and, when it still belongs to this account,
+  // bring back a draft the user typed before leaving the page.
+  useEffect(() => {
+    if (!profile) return;
+    const baseline = signature;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- baseline follows the loaded profile
+    setSavedCopy(baseline);
+    const storageKey = draftKey(profile.user_id);
+    const raw = sessionStorage.getItem(storageKey);
+    if (!raw) return;
+    try {
+      const stored = JSON.parse(raw) as {
+        userId?: string;
+        version?: number;
+        savedCopy?: string;
+        form?: FormSnapshot;
+      };
+      // The owner check is what stops account B from inheriting account A's
+      // draft: both start at version 0, so a version match alone proves nothing.
+      if (
+        !stored.form ||
+        stored.userId !== profile.user_id ||
+        stored.version !== profile.version ||
+        stored.savedCopy !== baseline
+      ) {
+        sessionStorage.removeItem(storageKey);
+        return;
+      }
+      applySnapshot(stored.form);
+      setNotice("已恢复上次未保存的草稿，核对无误后请点击保存。");
+    } catch {
+      sessionStorage.removeItem(storageKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- baseline captured once per stored profile
+  }, [profile]);
+
+  useEffect(() => {
+    if (savedCopy === null || !profile) return;
+    const storageKey = draftKey(profile.user_id);
+    if (signature === savedCopy) {
+      sessionStorage.removeItem(storageKey);
+      return;
+    }
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        userId: profile.user_id,
+        version: profile.version,
+        savedCopy,
+        form: currentForm,
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- currentForm mirrors signature
+  }, [signature, savedCopy, profile]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      // Browsers show their own wording; the flag is what matters.
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
 
   function toggle(value: string, list: string[], set: (items: string[]) => void) {
     set(list.includes(value) ? list.filter((item) => item !== value) : [...list, value]);
@@ -210,6 +321,16 @@ export default function ProfilePage() {
     hydrate(result.data);
     setStatus("ready");
     return result.data;
+  }
+
+  function discardDraft() {
+    if (profile) {
+      sessionStorage.removeItem(draftKey(profile.user_id));
+    }
+    if (savedCopy) {
+      applySnapshot(JSON.parse(savedCopy) as FormSnapshot);
+    }
+    setNotice("已放弃未保存的修改。");
   }
 
   async function handleSave() {
@@ -320,6 +441,22 @@ export default function ProfilePage() {
         </div>
         {error ? <p className="mt-3 break-words text-sm text-rose-700">{error}</p> : null}
         {notice ? <p className="mt-3 break-words text-sm text-emerald-700">{notice}</p> : null}
+        {dirty ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <span>有未保存的修改</span>
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={busy}
+              className="font-medium underline disabled:opacity-50"
+            >
+              立即保存
+            </button>
+            <button type="button" onClick={discardDraft} className="text-amber-700 underline">
+              放弃修改
+            </button>
+          </div>
+        ) : null}
       </section>
 
       {empty ? (

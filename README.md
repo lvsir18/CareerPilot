@@ -6,12 +6,12 @@
 > 已具备账号认证（限流 + CSRF）、用户隔离、岗位库、收藏、待投递清单、个人申请时间线，
 > Connector / SyncRun / Celery 同步管线；M2-R3 多企业搜索与单岗位详情核验；
 > M3 的 PDF/DOCX 简历解析、画像确认、JD 特征提取与 `heuristic_v1` 可解释匹配；
-> M4 的 Supervisor + 四个专业 Agent + 9 个受限工具 + PostgreSQL Checkpointer + `/agent` 页面；
+> M4 的 Supervisor + 四个专业 Agent + 10 个受限工具 + PostgreSQL Checkpointer + `/agent` 页面；
 > M5 的邮件连接与招聘事件同步、看板/日历等前端工作台；
 > M6 的 Agent 异步执行（202 + Worker）、`request_id` 幂等、SSE 断线续传与轮询降级、
 > 协作式取消与超时、本地备份/恢复脚本与个人版部署脚本。
 >
-> **如何启动与使用：见下方 [正式启动](#正式启动个人版) 与 [首次使用流程](#首次使用流程)。**
+> **如何启动：见下方 [正式启动](#正式启动个人版)；如何使用：见 [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)。**
 > **二次开发 / AI 接手：先读 [`AGENTS.md`](AGENTS.md)。**
 > 开发基线：`CareerPilot_Codex_Development_Spec_v1.0.md` + 产品变更
 > [`CareerPilot_Revised_Product_M2_M4_Spec_v2.md`](CareerPilot_Revised_Product_M2_M4_Spec_v2.md)，
@@ -154,43 +154,49 @@ curl -s localhost:8000/readyz     # {"status":"ready", ...}
 
 ## 首次使用流程
 
-按顺序走完即可得到完整闭环（每步都可在页面上完成，无需调 API）：
+> 完整的**使用者手册**（每个页面做什么、按钮在哪、失败怎么处理、常见问题）见
+> **[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)**。本节只保留最短闭环，用于部署后确认服务可用。
 
-1. **注册登录** — 打开 <http://localhost:3000/login>，注册任意本地账号（密码 ≥ 8 位，邮箱统一转小写）。
-2. **绑定邮箱（可选但推荐）** — `/settings/email`：
-   - QQ 邮箱：在 QQ 邮箱设置中开启 IMAP 并生成**授权码**（不是登录密码），填入邮箱 + 授权码；
-   - Gmail：需在 `.env` 配置 `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` 后才可用，否则页面明确提示未配置；
-   - 连接后点“测试连接”，成功即可由 Celery Beat 每 15 分钟增量同步招聘邮件；
-   - 同步只生成 `recruitment_event_candidates` **候选**，需在页面上确认才写入申请时间线。
-3. **简历与画像** — `/resumes` 上传 PDF/DOCX（≤10 MB）→ 解析结果进入 `/profile` →
-   核对教育/技能/经历/求职偏好 → 点“确认画像”。画像未确认时 Agent 会触发 HITL 中断而不是瞎猜。
-4. **岗位发现** — `/discover` 选择企业、关键词、城市、实习/校招、排序；
-   配置 `TAVILY_API_KEY` 时才走在线搜索，否则只用百度官方公开列表兜底；
-   搜索结果先是 `JobLead` 候选，点“查看官网”去官方站点，点“尝试核验”通过后才进入已核验岗位库。
-   也可在 `/import` 粘贴官方 URL 或私有 JD（私有 JD 仅本人可见）。
-5. **智能匹配** — `/matches` 查看按画像排序的推荐，或在岗位卡片点“匹配我的简历”看四维可解释得分
-   （技能 / 方向 / 偏好 / 经历 + 资格独立判断）；画像或 JD 变化会自动失效缓存重算。
-6. **Agent 工作流** — `/agent` 新建会话并描述目标（例如“帮我找北京的后端实习并排优先级”）：
-   - 提交后立即返回（202 + `run_id`），Worker 异步执行；
-   - 页面通过 SSE 实时显示阶段事件、工具调用与结果，断线自动降级轮询；
-   - 随时可点“取消”，服务端协作式停止；超时上限 300s；
-   - 同一 `request_id` 重试是幂等的，不会重复执行。
-7. **推进申请** — 收藏/待投递在 `/saved-jobs`；登记进度在 `/applications`（列表/表格/看板三视图），
-   可导入 `.eml` 招聘通知（先预览、确认后写时间线）；`/calendar` 只展示正文里明确给出时间的面试；
-   全程**不会**自动投递、自动填表或代登录招聘平台。
-8. **数据备份** — 见下方 [备份与恢复](#备份与恢复)。
+1. **注册登录** — <http://localhost:3000/login>（密码 ≥ 8 位，邮箱统一转小写）。
+2. **简历 → 画像** — `/resumes` 上传 PDF/DOCX（默认 ≤ 10 MB）→ `/profile` 核对教育/技能/经历/偏好 →
+   点**确认画像**。未确认时推荐与 Agent 匹配都会要求先确认，不会给出分数；修改画像后需重新确认。
+3. **找岗位 → 记进度** — `/discover`（官方站点直连检索）或 `/matches`（基于画像的推荐）找到岗位 →
+   收藏或「登记申请进度」→ 在 `/applications/{id}` 维护状态、登记笔试/面试预约 →
+   `/calendar` 只显示这些**预约**（不显示投递、初筛等状态变更）。
+4. **可选** — `/agent` 多轮问答（异步执行、实时进度、可停止）；`/settings/email` 连接邮箱
+   （QQ IMAP 授权码 / Gmail 需自备 OAuth 凭据），同步只产生「待确认」候选。
 
+启动后最容易卡住的三点：
+
+- `.env` 缺 `SESSION_SECRET` / `MAILBOX_SECRET_KEY` → 登录会话或邮箱凭据不可用；
+- 未执行 `make migrate`（`alembic upgrade head`）→ 页面能打开但接口报 500；
+- 未配置 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` → 只有 `/agent` 不可用，其余功能正常。
+
+全程**不会**自动投递、自动填表或代登录招聘平台。
 
 ### 发现与导入岗位（M2-R1）
 
+> 页面上的操作细节（多选企业、交接给 Agent、私有 JD 一键登记到看板）见手册 6.1–6.3。
+
 登录后打开 <http://localhost:3000/discover>：
 
-1. 选择多家企业、关键词、城市、实习/校招、岗位方向和排序；
-2. 系统优先调用已配置的 licensed search provider；未配置 key 时，百度来源使用官方公开列表页；
+页面有两个入口：
+
+**企业官网直连检索**（腾讯 / 字节跳动 / 小红书 / 哔哩哔哩 / 美团，默认勾选腾讯）
+
+- 服务端浏览器把关键词输入官方搜索框，读取标题、城市、招聘类型与完整 JD；
+- 不消耗搜索额度、不依赖 `TAVILY_API_KEY`；仅覆盖校招 / 实习（美团先切「应届校招」）。
+
+**筛选与搜索**
+
+1. 选择企业（19 家，默认 10 家 P0）、关键词、城市、实习/校招、岗位方向、发现窗口与排序；
+2. 走搜索索引（需 `TAVILY_API_KEY`）；无 Key 时该路径不可用，改用直连检索或手动导入；
 3. 搜索结果只生成 `JobLead` 候选链接；点击“查看官网”前往官方站点自行申请；
-4. 百度候选可点击“尝试核验”，成功后才进入已核验 `Job` 库并记录来源证据；
+4. 候选可点击“尝试核验”，成功后才进入已核验 `Job` 库并记录来源证据；
 5. 未核验候选保留“待核验”，不会伪造完整 JD；
 6. 分页展示候选与已核验岗位；Provider 状态明确显示不可用原因。
+
+> 页面底部「询问 Agent」会带上关键词/企业/城市/类型/方向（不含直连开关）。
 
 手动导入：<http://localhost:3000/import>
 
@@ -202,11 +208,12 @@ curl -s localhost:8000/readyz     # {"status":"ready", ...}
 
 打开 <http://localhost:3000/applications>：
 
-1. 从岗位/发现页点击“已申请，登记进度”，或使用“仅登记官方链接”；
+1. 从岗位/发现页点击“已申请，登记进度”，或使用“仅登记官方链接”；私有 JD 详情可一键登记到看板；
 2. 在官网自行登录、申请，回到这里更新状态；
 3. 可上传 `.eml` 招聘通知：系统只生成预览，确认后才写入时间线；
-4. 邮件未明确说明的状态不会被自动推断；重复邮件不会重复导入；
-5. 打开官网不会自动把状态改为“已申请”。
+4. 打开某条申请可登记**笔试/面试预约**（「新增一轮」与「改期（仅替换选中的那条预约）」），取消后日历不再显示但时间线保留；
+5. 邮件未明确说明的状态不会被自动推断；重复邮件不会重复导入；
+6. 打开官网不会自动把状态改为“已申请”。
 
 > 不托管招聘平台密码/Cookie，不自动投递、不自动填表。招聘**邮箱**连接是另一条链路：
 > QQ 走 IMAP 授权码、Gmail 走 OAuth（需自备 Google 凭据），见 `/settings/email`。
@@ -227,7 +234,7 @@ ADMIN_EMAILS=admin@example.com
 4. `POST /api/v1/job-syncs`（需 CSRF Token）触发 Celery 任务；
 5. `GET /api/v1/job-syncs/{id}` 查看 fetched / created / updated / failed。
 
-> M2-R1 已支持百度单个官方链接导入，并在线核验 3 条真实岗位；这里的 Celery 来源同步仍只对已配置来源生效。
+> 岗位发现（直连检索 / 搜索索引 / 手动导入）与 Celery 来源同步是两条独立链路；后者仍只对已配置来源生效。
 > 默认只有 `fixture`（演示）来源启用，阿里/百度/手工来源保持禁用或仅用于显式导入。
 
 | 页面 | 说明 |
@@ -238,12 +245,12 @@ ADMIN_EMAILS=admin@example.com
 | `/discover` | 官方站点限定发现 + 候选链接 + 核验 |
 | `/import` | 导入官方岗位链接 / 私有 JD |
 | `/resumes` | 简历上传、解析、设为画像来源 |
-| `/profile` | 画像与求职偏好编辑、确认画像 |
+| `/profile` | 画像与求职偏好编辑、确认画像（含未保存草稿提示与恢复） |
 | `/matches` | 个性化推荐 + 单岗位可解释匹配 |
 | `/saved-jobs` | 收藏 / 待投递清单 |
-| `/applications` | 申请列表/表格/看板、时间线、`.eml` 导入 |
-| `/calendar` | 面试日程（仅明确时间的申请事件） |
-| `/agent` | 多 Agent 工作流（异步 + SSE 进度） |
+| `/applications` | 申请列表/表格/看板、时间线、`.eml` 导入；详情可登记/改期/取消预约 |
+| `/calendar` | 面试日程：只显示已预约的笔试/面试，支持月/周/列表 |
+| `/agent` | 多 Agent 工作流（异步 + SSE 进度、可停止、刷新恢复） |
 | `/settings/email` | 邮箱连接、测试、立即同步、候选确认 |
 
 ## 本地开发（不使用 Docker 运行应用）
@@ -318,21 +325,36 @@ ls backups/<时间戳>                                     # database.sql / uplo
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/auth/register` | 注册并建立会话（Argon2 + HttpOnly Cookie） |
-| POST | `/auth/login` | 登录 |
+| POST | `/auth/login` | 登录（失败计入限流） |
 | POST | `/auth/logout` | 撤销当前会话（需 CSRF） |
 | GET | `/auth/me` | 当前用户 |
 | GET | `/auth/csrf` | 获取/轮换 CSRF Token |
-| GET/PATCH | `/profile/me` | 画像与求职偏好，版本号自增 |
+| GET/PATCH | `/profile/me` | 画像与求职偏好，版本号自增；内容变更会失效「已确认」 |
+| POST | `/profile/confirm` | 确认画像（推荐与 Agent 匹配的前置条件） |
+| POST | `/profile/apply-resume` | 用简历解析结果覆盖画像草稿 |
+| POST/GET/DELETE | `/resumes` | 上传（PDF/DOCX，默认 ≤ 10 MB）/ 列表 / 删除 |
+| GET | `/resumes/{id}` | 单份简历（解析状态与文本） |
+| POST | `/resumes/{id}/primary` | 设为画像主要来源 |
 | GET | `/jobs` | 搜索：`q`/`keyword`、`companies`、`cities`、`job_types`、`source_types`、`recruitment_program`、`is_demo`、时间、`status`、`sort`、分页 |
 | GET | `/jobs/{id}` | 岗位详情（原始 JD、来源、时间） |
 | POST/DELETE | `/jobs/{id}/save` | 收藏 / 待投递，按 `list_type` 幂等 |
+| GET | `/jobs/discover` | 已有岗位 + 官方候选链接 + Provider 状态；支持 `companies`、`city`、`job_type`、`job_family`、`sort`、`page` |
+| POST | `/job-imports/preview` | 解析用户提交的百度官方详情页（不写库） |
+| POST | `/job-imports` | 官方页面确认导入（粘贴 JD 请走 `/job-leads/import`） |
+| GET | `/job-imports/capabilities` | 当前支持的导入方式 |
+| GET | `/job-leads` | 公开候选 + 当前用户私有候选 |
+| GET | `/job-leads/sources` | 已在线校验的 P0/P1 官方招聘来源目录 |
+| POST | `/job-leads/import` | 官方 URL + 可选 JD，保存为私有候选 |
+| GET | `/job-leads/{id}` | 候选详情：来源证据、核验失败原因、是否私有 |
+| POST | `/job-leads/{id}/verify` | 单岗位官方/可信 ATS 详情核验（Tavily Extract） |
 | GET | `/saved-jobs` | 收藏与待投递清单 |
-| POST | `/applications` | Job / JobLead / 官方链接登记（重复返回 409） |
+| POST | `/applications` | Job / JobLead / 官方链接登记（重复返回 409 + 已有 id） |
 | GET | `/applications` | 申请列表，支持 `status`、`company`、`query` |
 | GET | `/applications/{id}` | 详情 + 完整状态时间线 |
 | PATCH | `/applications/{id}` | 更新备注/外部岗位信息 |
 | GET | `/applications/{id}/events` | 状态事件 |
-| POST | `/applications/{id}/events` | 用户确认的进度事件（来源 reference 幂等） |
+| POST | `/applications/{id}/events` | 用户确认的进度事件（来源 reference 幂等）；`reschedule_event_id` 指定被替换的预约，`supersede_scheduled` 仅在同类型唯一时兼容 |
+| POST | `/applications/{id}/events/{event_id}/cancel` | 取消一条预约（不删历史，只作废日程） |
 | PATCH | `/applications/{id}/status` | 兼容旧客户端的条件更新 |
 | DELETE | `/applications/{id}` | 删除记录及事件 |
 | POST | `/application-imports/email` | 上传 `.eml`，仅生成预览 |
@@ -343,24 +365,11 @@ ls backups/<时间戳>                                     # database.sql / uplo
 | PATCH | `/job-sources/{id}` | 管理员启用/配置来源（不含密钥） |
 | POST | `/job-syncs` | 管理员触发 Celery 同步（202，需 CSRF） |
 | GET | `/job-syncs` / `/job-syncs/{id}` | 管理员查看同步审计 |
-| POST | `/job-imports/preview` | 解析用户提交的百度官方详情页（不写库） |
-| POST | `/job-imports` | 官方页面确认导入（粘贴 JD 请走 `/job-leads/import`） |
-| GET | `/job-imports/capabilities` | 当前支持的导入方式 |
-| GET | `/jobs/discover` | 已有岗位 + 官方候选链接 + Provider 状态；支持 `companies`、`city`、`job_type`、`job_family`、`sort`、`page` |
-| GET | `/job-leads` | 公开候选 + 当前用户私有候选 |
-| GET | `/job-leads/sources` | 已在线校验的 P0/P1 官方招聘来源目录 |
-| POST | `/job-leads/import` | 官方 URL + 可选 JD，私有候选 |
-| GET | `/job-leads/{id}` | 候选详情 + 来源证据 + 核验失败原因 |
-| POST | `/job-leads/{id}/verify` | 单岗位官方/可信 ATS 详情核验（Tavily Extract） |
-| POST/GET/DELETE | `/resumes` | 上传/列表/删除 PDF/DOCX 简历 |
-| POST | `/resumes/{id}/primary` | 将某份简历设为画像主要来源 |
-| GET/PATCH | `/profile/me` | 读取/更新画像与求职偏好 |
-| POST | `/profile/confirm` | 确认正式画像（版本 + 内容哈希） |
-| POST | `/profile/apply-resume` | 将简历解析结果应用到画像 |
-| POST | `/matches/jobs/{job_id}` | 单岗位完整 JD 匹配 |
+| GET | `/matches/recommendations` | 个性化推荐（需已确认画像，否则 409 `PROFILE_NOT_CONFIRMED`） |
+| POST | `/matches/jobs/{job_id}` | 单岗位可解释匹配（同一画像闸门） |
 | POST | `/matches/job-leads/{lead_id}` | JobLead 基础匹配（不输出百分制得分） |
-| GET | `/matches/recommendations` | 个性化推荐（过滤、排除已申请） |
 | GET | `/dashboard/summary` | 工作台真实统计 + 最新岗位 + 最近进度 + 即将开始 |
+| GET | `/dashboard/calendar` | 面试日程：`from`/`to`，只返回未被作废的笔试/面试预约 |
 | POST/GET | `/mailboxes` / `/mailboxes/qq/connect` | 邮箱连接（QQ IMAP 授权码） |
 | GET | `/mailboxes/gmail/authorize` / `/gmail/callback` | Gmail OAuth（未配置时明确返回） |
 | POST | `/mailboxes/{id}/test` / `{id}/sync` | 测试连接 / 立即同步 |
@@ -368,8 +377,9 @@ ls backups/<时间戳>                                     # database.sql / uplo
 | POST | `/recruitment-email-candidates/{id}/confirm` / `discard` | 确认写入时间线 / 忽略 |
 | POST/GET | `/agent/threads` | 新建/列出 Agent 会话 |
 | GET | `/agent/threads/{id}/messages` | 读取会话历史消息 |
-| POST | `/agent/threads/{id}/runs` | 提交消息并同步执行 Agent 任务（兼容旧路径） |
-| POST | `/agent/threads/{id}/resume` | 从 Human-in-the-Loop 中断恢复 |
+| GET | `/agent/threads/{id}/runs` | 会话最近 N 次 run（刷新后恢复订阅与等待状态） |
+| POST | `/agent/threads/{id}/runs` | 提交消息并同步执行（兼容旧路径） |
+| POST | `/agent/threads/{id}/resume` | 从 Human-in-the-Loop 中断恢复（异步入队） |
 | POST | `/agent/runs` | **异步提交** Agent 任务（202，`request_id` 幂等） |
 | GET | `/agent/runs/{id}` | 查询 run 状态、结果与错误摘要 |
 | GET | `/agent/runs/{id}/events` | 事件回放（`?after=<sequence>`） |
@@ -424,7 +434,7 @@ ls backups/<时间戳>                                     # database.sql / uplo
 | `TAVILY_EXTRACT_DEPTH` / `TAVILY_EXTRACT_DAILY_BUDGET` / `TAVILY_EXTRACT_CACHE_TTL_SECONDS` | Tavily Extract 深度、每日预算、缓存时长 |
 | `SEARCH_DAILY_BUDGET_PER_PROVIDER` / `SEARCH_RATE_LIMIT_PER_MINUTE` / `SEARCH_TIMEOUT_SECONDS` | 每日请求预算、分钟限流、超时 |
 | `SEARCH_CACHE_TTL_SECONDS` | Tavily 结果 Redis 缓存时长 |
-| `OFFICIAL_SITE_DISCOVERY_ENABLED` | 是否启用百度官方公开列表页作为发现源 |
+| `OFFICIAL_SITE_DISCOVERY_ENABLED` | 是否启用官方站点发现兜底（搜索不可用时的官方来源） |
 | `LEAD_VERIFY_RATE_LIMIT_PER_MINUTE` | 候选核验频率限制 |
 | `MAX_RESUME_MB` | 简历文件大小上限，默认 10 MB |
 | `FILE_STORAGE_DIR` | 简历私有存储目录（本地文件系统） |
@@ -452,11 +462,10 @@ ls backups/<时间戳>                                     # database.sql / uplo
 ## 已知限制
 
 - **M2-R3 搜索 API 仅 Tavily**：其他搜索 API 已删除；无 Tavily Key 时明确不可用；
-- Tavily 25 条查询发现 66 条唯一候选，但只有用户主动触发才执行详情提取；
-- 百度兜底 3 条；合计 69 条。仍有多家企业只返回招聘入口/列表，或详情被关键词/方向过滤；详情核验已支持官方/可信 ATS 单岗位 Extract，百度保留本地详情解析；
-- 百度只读第一页 10 条候选，`pageNum/pageSize/keyWord` SSR 未生效；不能声称同步 504 条；
-- 搜索摘要不进入 Job 库；只有百度公开详情核验成功后才写入完整岗位；
-- 阿里官方 API 缺企业凭据；字节/腾讯/美团仍无公开许可；
+- 在线搜索（Tavily）只是站外补充；腾讯 / 字节跳动 / 小红书 / 哔哩哔哩 / 美团支持官方直连检索（服务端渲染抓取），其余企业（阿里、得物、DeepSeek、360 等）依赖搜索索引或手动导入；
+- 直连检索只覆盖校招 / 实习（美团先切「应届校招」，不含社招），返回条数以官方页面为准，不承诺固定数量；
+- 搜索摘要不进入 Job 库；只有成功读取官方详情页后才写入完整岗位；
+- 阿里官方 API 需要企业凭据，未配置时该来源不可用；
 - 邮件状态提取依赖文本规则，不能保证识别所有企业模板；无法确定时必须人工确认；
 - 邮件正文摘要保存在用户私有数据库，未做字段级加密；
 - `.eml` 批量导入仍是文件上传方式；IMAP / Gmail 同步已可用，但需自备授权码或 Google OAuth 凭据，浏览器插件未实现；
@@ -486,6 +495,7 @@ ls backups/<时间戳>                                     # database.sql / uplo
 
 ## 文档索引
 
+- **使用者手册**：[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
 - 状态总览：[`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)
 - 接手开发：[`AGENTS.md`](AGENTS.md)
 - 搜索与核验：[`docs/M2_CHINA_JOB_SOURCES.md`](docs/M2_CHINA_JOB_SOURCES.md)、

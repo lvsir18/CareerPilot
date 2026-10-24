@@ -38,6 +38,16 @@ export default function DashboardPage() {
     });
   }, []);
 
+  // A brand-new account sees an empty board; the three steps above are what a
+  // first-time user actually needs, so they replace the bare "0 / 0 / 0" grid.
+  const isNewcomer =
+    summary !== null &&
+    summary.counts.saved === 0 &&
+    summary.counts.planned === 0 &&
+    summary.counts.applied === 0 &&
+    summary.counts.interview === 0 &&
+    summary.counts.offer === 0;
+
   if (error) {
     return (
       <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
@@ -54,6 +64,35 @@ export default function DashboardPage() {
           统计与进度均来自你的真实数据；收藏与计划申请不计入“已申请”。
         </p>
       </section>
+
+      {isNewcomer ? (
+        <section className="rounded-xl border border-sky-200 bg-sky-50 p-5">
+          <h2 className="text-sm font-semibold text-sky-900">从这里开始（约 5 分钟）</h2>
+          <ol className="mt-3 grid gap-3 text-xs leading-relaxed text-sky-900 sm:grid-cols-3">
+            <li className="rounded-lg bg-white/70 p-3">
+              <p className="font-medium">1. 上传简历</p>
+              <p className="mt-1 text-sky-800">PDF / DOCX，失败会明确告诉你原因。</p>
+              <Link href="/resumes" className="mt-2 inline-block font-medium underline">
+                去上传
+              </Link>
+            </li>
+            <li className="rounded-lg bg-white/70 p-3">
+              <p className="font-medium">2. 核对并确认画像</p>
+              <p className="mt-1 text-sky-800">确认后才会参与岗位匹配。</p>
+              <Link href="/profile" className="mt-2 inline-block font-medium underline">
+                去核对
+              </Link>
+            </li>
+            <li className="rounded-lg bg-white/70 p-3">
+              <p className="font-medium">3. 查看推荐 / 发现岗位</p>
+              <p className="mt-1 text-sky-800">收藏或加入待投递，再登记真实进度。</p>
+              <Link href="/matches" className="mt-2 inline-block font-medium underline">
+                看推荐
+              </Link>
+            </li>
+          </ol>
+        </section>
+      ) : null}
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {COUNT_LABELS.map((item) => (

@@ -9,8 +9,8 @@ import { StatusPill } from "@/components/status-pill";
 import { getJobLead, verifyJobLead } from "@/lib/client-api";
 import type { JobLeadDetail } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { formatEvidenceKind } from "@/lib/job-display";
-import { formatLeadStatus, verificationTone } from "@/lib/job-display";
+import { formatEvidenceKind, formatLeadStatus, verificationTone } from "@/lib/job-display";
+import { RegisterLeadButton } from "@/components/register-lead-button";
 
 export default function LeadDetailPage() {
   const params = useParams<{ id: string }>();
@@ -185,10 +185,12 @@ export default function LeadDetailPage() {
             <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
               核验只读取你提交的这一个官方公开页面，不会登录或批量抓取。
             </p>
+            <RegisterLeadButton
+              leadId={lead.id}
+              company={lead.company}
+              title={lead.title}
+            />
             <div className="mt-3 flex flex-wrap gap-3 text-xs">
-              <Link href="/applications" className="text-sky-700 hover:underline">
-                去登记申请进度
-              </Link>
               <Link href="/discover" className="text-slate-600 hover:underline">
                 返回招聘中心
               </Link>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -61,11 +62,13 @@ class ProfileService:
 
     def _serialize(
         self,
+        user_id: UUID,
         profile: CandidateProfile | None,
         preferences: JobPreference | None,
     ) -> ProfileRead:
         pref = preferences
         return ProfileRead(
+            user_id=user_id,
             headline=profile.headline if profile else None,
             education=[
                 EducationItem.model_validate(item)
@@ -101,6 +104,7 @@ class ProfileService:
 
     def get(self, user: User) -> ProfileRead:
         return self._serialize(
+            user.id,
             self._repository.get_profile(user.id),
             self._repository.get_preferences(user.id),
         )
@@ -200,7 +204,7 @@ class ProfileService:
         self._session.commit()
         self._session.refresh(profile)
 
-        return self._serialize(profile, self._repository.get_preferences(user.id))
+        return self._serialize(user.id, profile, self._repository.get_preferences(user.id))
 
     def confirm(self, user: User) -> ProfileRead:
         profile = self._get_or_create_profile(user)
@@ -211,7 +215,7 @@ class ProfileService:
         profile.version += 1
         self._session.commit()
         self._session.refresh(profile)
-        return self._serialize(profile, self._repository.get_preferences(user.id))
+        return self._serialize(user.id, profile, self._repository.get_preferences(user.id))
 
     def apply_resume(self, user: User, resume: Resume) -> ProfileRead:
         parsed = resume.parsed_json or {}
@@ -253,4 +257,4 @@ class ProfileService:
         )
         self._session.commit()
         self._session.refresh(profile)
-        return self._serialize(profile, self._repository.get_preferences(user.id))
+        return self._serialize(user.id, profile, self._repository.get_preferences(user.id))

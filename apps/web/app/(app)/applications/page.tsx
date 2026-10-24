@@ -92,7 +92,7 @@ export default async function ApplicationsPage({
             官网申请由你自行完成；CareerPilot 只记录你确认的进度、证据和时间线，不会自动投递。
           </p>
         </div>
-        <StatusPill tone="info">M2-R2 · 手动/邮件确认</StatusPill>
+        <StatusPill tone="info">手动 / 邮件确认</StatusPill>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">

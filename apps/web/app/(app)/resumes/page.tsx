@@ -49,7 +49,13 @@ export default function ResumesPage() {
       setError(result.error.message);
       return;
     }
-    setNotice(`已上传并解析：${file.name}`);
+    // A failed extraction is still an accepted upload: say so precisely instead
+    // of a green "已上传并解析" next to a "解析失败" card.
+    setNotice(
+      result.data.parse_status === "success"
+        ? `已上传并解析：${file.name}`
+        : `文件已保存，但没能从 ${file.name} 提取到文字（可能是扫描版）。可以改用文字版 PDF/DOCX，或直接在「我的画像」手工填写。`,
+    );
     await refresh();
   }
 
