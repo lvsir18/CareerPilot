@@ -53,6 +53,7 @@ interface ExperienceDraft {
 
 interface ProjectDraft {
   title: string;
+  time_range: string;
   summary: string;
 }
 
@@ -91,7 +92,11 @@ function expDrafts(profile: Profile): ExperienceDraft[] {
 }
 
 function projectDrafts(profile: Profile): ProjectDraft[] {
-  return profile.projects.map((item) => ({ title: item.title, summary: item.summary ?? "" }));
+  return profile.projects.map((item) => ({
+    title: item.title,
+    time_range: item.time_range ?? "",
+    summary: item.summary ?? "",
+  }));
 }
 
 function isBlank(profile: Profile): boolean {
@@ -304,7 +309,11 @@ export default function ProfilePage() {
         }))
         .filter((item) => item.title || item.description),
       projects: projects
-        .map((item) => ({ title: item.title.trim(), summary: item.summary.trim() || null }))
+        .map((item) => ({
+          title: item.title.trim(),
+          time_range: item.time_range.trim() || null,
+          summary: item.summary.trim() || null,
+        }))
         .filter((item) => item.title),
       preferences: {
         ...(profile?.preferences ?? {}),
@@ -740,7 +749,7 @@ export default function ProfilePage() {
             <h2 className="text-sm font-semibold text-slate-800">项目</h2>
             <button
               type="button"
-              onClick={() => setProjects((prev) => [...prev, { title: "", summary: "" }])}
+              onClick={() => setProjects((prev) => [...prev, { title: "", time_range: "", summary: "" }])}
               className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700"
             >
               <Plus className="size-3" aria-hidden />
@@ -765,6 +774,21 @@ export default function ProfilePage() {
                       )
                     }
                     placeholder="CareerPilot"
+                    className={inputClass}
+                  />
+                </label>
+                <label className="mt-3 block">
+                  <span className="text-xs font-medium text-slate-600">时间</span>
+                  <input
+                    value={item.time_range}
+                    onChange={(event) =>
+                      setProjects((prev) =>
+                        prev.map((row, i) =>
+                          i === index ? { ...row, time_range: event.target.value } : row,
+                        ),
+                      )
+                    }
+                    placeholder="2025.03 - 2026.01（简历没写就留空）"
                     className={inputClass}
                   />
                 </label>

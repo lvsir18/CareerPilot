@@ -217,25 +217,38 @@ class JobLeadService:
         published_date: date | None = None,
         company: str | None = None,
     ) -> JobLead:
-        official = canonical_official_url(url)
-        provided_company = resolve_company(company)
-        if provided_company and provided_company != official.company:
-            raise AppError(
-                code="LEAD_COMPANY_MISMATCH",
-                message="填写的公司与官方域名不一致",
-                status_code=422,
-            )
-        company_key = official.company
+        try:
+            official = canonical_official_url(url)
+        except ValueError:
+            # A pasted JD may come from any company. The link is user-supplied
+            # and never auto-verified, so an unknown domain is a normal private
+            # candidate — not a 500 and not a "only baidu is supported" error.
+            official = None
+
+        if official is not None:
+            provided_company = resolve_company(company)
+            if provided_company and provided_company != official.company:
+                raise AppError(
+                    code="LEAD_COMPANY_MISMATCH",
+                    message="填写的公司与官方域名不一致",
+                    status_code=422,
+                )
+            company_key = official.company
+            canonical_url = official.url
+        else:
+            company_key = (company or "").strip()[:50] or "未知企业"
+            canonical_url = str(url).strip()[:1000]
+
         company_row = self._company(company_key)
-        dedupe_key = _hash("user", str(user_id), official.url)
+        dedupe_key = _hash("user", str(user_id), canonical_url)
         lead = self._session.scalar(select(JobLead).where(JobLead.dedupe_key == dedupe_key))
-        content_hash = _hash(title, description, official.url, city, job_type)
+        content_hash = _hash(title, description, canonical_url, city, job_type)
         if lead is None:
             lead = JobLead(
                 owner_user_id=user_id,
                 company_id=company_row.id,
                 title=title.strip()[:300],
-                official_url=official.url,
+                official_url=canonical_url,
                 summary=(description or "")[:20_000] or None,
                 source_method=JobSourceMethod.MANUAL_IMPORT,
                 verification_status=LeadVerificationStatus.USER_PROVIDED,
@@ -250,7 +263,7 @@ class JobLeadService:
             self._add_evidence(
                 lead_id=lead.id,
                 job_id=None,
-                source_url=official.url,
+                source_url=canonical_url,
                 evidence_kind="user_paste",
                 verification_method="user_confirmed",
                 content_hash=content_hash,

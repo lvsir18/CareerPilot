@@ -37,11 +37,25 @@ _SECTION_TITLES = {
     "项目": "project",
     "科研": "research",
     "竞赛": "competition",
-    "获奖": "competition",
+    "获奖": "award",
+    "荣誉": "award",
+    "奖学金": "award",
     "开源": "open_source",
     "经历": "other",
 }
 _SECTION_STOP = {"教育", "技能", "专业技能", "自我评价", "语言", "证书", "联系方式"}
+
+# Experience kinds that belong to the profile's "projects" panel.
+_PROJECT_KINDS = {"project", "research", "open_source"}
+# Kinds kept out of both panels (scholarships, awards, competitions).
+_AWARD_KINDS = {"competition", "award"}
+
+# "2025.06 - 2025.09", "2024年6月—2024年9月", "2026.4 - 至今"
+# "2025.10", "2025/10", "2025年10月" (a bare year also counts).
+_RANGE_PART = r"(?:19|20)\d{2}(?:\s*[./年]?\s*\d{1,2}\s*月?)?"
+_RANGE_RE = re.compile(
+    rf"({_RANGE_PART})\s*(?:-|–|—|~|至|到)\s*({_RANGE_PART}|至今|今)",
+)
 
 _EDU_HEADERS = ("教育背景", "教育经历", "教育", "学历")
 
@@ -146,40 +160,172 @@ def _parse_education(text: str) -> list[dict]:
     ]
 
 
-def _parse_experiences(text: str) -> list[dict]:
-    # Locate section headers and assign each bullet to a kind.
+def _looks_like_heading(line: str) -> bool:
+    """A section heading is short, has no date and no sentence punctuation."""
+    if not line or len(line) > 12:
+        return False
+    if _RANGE_RE.search(line) or _YEAR_RE.search(line):
+        return False
+    return not any(mark in line for mark in ("，", "。", "；", ":", "：", "|"))
+
+
+def _tidy_range_part(part: str) -> str:
+    """``2024 12`` / ``2024年12月`` -> ``2024.12``; ``至今`` stays as is."""
+    text = re.sub(r"\s+", " ", part).strip()
+    match = re.match(r"((?:19|20)\d{2})\s*[./年]?\s*(\d{1,2})\s*月?", text)
+    if match:
+        return f"{match.group(1)}.{int(match.group(2)):02d}"
+    return re.sub(r"\s*[./年]\s*", ".", text).strip(" .")
+
+
+def _normalise_range(value: str) -> str:
+    """Rewrite any date range in the canonical ``2025.10 - 2026.01`` form."""
+    match = _RANGE_RE.search(value)
+    if not match:
+        return re.sub(r"\s+", " ", value).strip()[:100]
+    start = _tidy_range_part(match.group(1))
+    end = _tidy_range_part(match.group(2))
+    return f"{start} - {end}"[:100]
+
+
+# Marker for "this heading only closes the previous section".
+_STOP_KIND = "__stop__"
+
+_BULLET_RE = re.compile(r"^\s*(?:[•·\-\*\u2022]|\d+[.、)])")
+
+
+def _is_range_anchor(line: str) -> bool:
+    """A date range only marks a new entry when it starts the line or is short.
+
+    Descriptions often mention periods ("对比 2024.12-2026.9 的数据"); treating
+    those as anchors splits one project into three broken entries.
+    """
+    if not _RANGE_RE.search(line):
+        return False
+    stripped = line.lstrip()
+    if len(line) > 60:
+        return False
+    return stripped[:1].isdigit() or len(line) <= 30
+
+
+def _looks_like_title_tail(line: str) -> bool:
+    """The heading of the *next* entry often sits above its date line."""
+    text = line.strip()
+    if not text or len(text) > 60 or _BULLET_RE.match(text):
+        return False
+    if _RANGE_RE.search(text):
+        return False
+    return "。" not in text and text.count("，") <= 1 and "：" not in text
+
+
+def _split_entries(block: list[str]) -> list[list[str]]:
+    """Split one section at real date-range anchors.
+
+    Many resumes put the range on its own line after the title, so an anchor is
+    only honoured when the current entry already has one.
+    """
+    entries: list[list[str]] = []
+    current: list[str] = []
+    for line in block:
+        anchor = _is_range_anchor(line)
+        already = any(_is_range_anchor(item) for item in current)
+        if anchor and already:
+            # The heading of the new entry usually sits just above its date line,
+            # possibly after one or two wrapped description lines.
+            move_at: int | None = None
+            for index in range(len(current) - 1, max(len(current) - 4, -1), -1):
+                if _looks_like_title_tail(current[index]):
+                    move_at = index
+                    break
+            if move_at is not None:
+                entries.append(current[:move_at])
+                current = [*current[move_at:], line]
+            else:
+                entries.append(current)
+                current = [line]
+        else:
+            current.append(line)
+    if current:
+        entries.append(current)
+    return [entry for entry in entries if any(line.strip() for line in entry)]
+
+
+def _entry_title(entry: list[str]) -> str | None:
+    """Pick the heading line: not a bullet, not a sentence, date removed."""
+    fallback: str | None = None
+    for line in entry:
+        text = _RANGE_RE.sub("", line).strip(" |·-—,，•*")
+        if len(text) < 2:
+            continue
+        if fallback is None and not _BULLET_RE.match(line):
+            fallback = text[:200]
+        if _BULLET_RE.match(line):
+            continue
+        if len(text) > 80 or text.count("，") >= 2 or "。" in text:
+            continue
+        return text[:200]
+    return fallback
+
+
+def _parse_sections(text: str) -> list[dict]:
+    """Split the resume into dated entries and label each by its section."""
     lines = [line.strip() for line in text.splitlines()]
     sections: list[tuple[str, int]] = []
     for index, line in enumerate(lines):
+        if not _looks_like_heading(line):
+            continue
+        matched = False
         for title, kind in _SECTION_TITLES.items():
-            if title in line and len(line) <= 12:
+            if title in line:
                 sections.append((kind, index))
+                matched = True
                 break
+        if matched:
+            continue
+        # A section that ends the block (教育/技能/…) must still close the
+        # previous one, otherwise skills get appended to the last project.
+        if any(stop in line for stop in _SECTION_STOP):
+            sections.append((_STOP_KIND, index))
     if not sections:
         return []
 
-    experiences: list[dict] = []
+    items: list[dict] = []
     for position, (kind, start) in enumerate(sections):
         end = sections[position + 1][1] if position + 1 < len(sections) else len(lines)
-        block = [line for line in lines[start + 1 : end] if line]
-        if not block:
+        if kind == _STOP_KIND:
             continue
-        # Skip section title lines that belong to a later block.
-        block = [line for line in block if not any(s in line for s in _SECTION_STOP)]
-        title = block[0] if block else None
-        time_range = next((line for line in block if _YEAR_RE.search(line)), None)
-        skills = extract_skills(" ".join(block))
-        description = " ".join(block[:8])
-        experiences.append(
-            {
-                "kind": kind,
-                "title": title,
-                "time_range": time_range,
-                "skills": skills,
-                "description": description[:2000] if description else None,
-            }
-        )
-    return experiences
+        block = [line for line in lines[start + 1 : end] if line]
+        # Drop a stray heading that leaked in, but never a body line: matching
+        # "语言"/"技能" as substrings used to delete real project titles such as
+        # "基于自然语言理解的…".
+        block = [
+            line
+            for line in block
+            if not (
+                len(line) <= 12
+                and not _RANGE_RE.search(line)
+                and any(stop in line for stop in _SECTION_STOP)
+            )
+        ]
+        for entry in _split_entries(block):
+            title = _entry_title(entry)
+            range_line = next((line for line in entry if _RANGE_RE.search(line)), None)
+            description = " ".join(entry)
+            items.append(
+                {
+                    "kind": kind,
+                    "title": title,
+                    "time_range": _normalise_range(range_line) if range_line else None,
+                    "skills": extract_skills(description),
+                    "description": description[:2000] if description else None,
+                }
+            )
+    return items
+
+
+def _parse_experiences(text: str) -> list[dict]:
+    """Kept for compatibility: every dated entry, regardless of kind."""
+    return _parse_sections(text)
 
 
 @dataclass(slots=True)
@@ -190,6 +336,8 @@ class ParsedResume:
     education: list[dict] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
     experiences: list[dict] = field(default_factory=list)
+    projects: list[dict] = field(default_factory=list)
+    awards: list[dict] = field(default_factory=list)
     text_length: int = 0
     is_scan_like: bool = False
     warnings: list[str] = field(default_factory=list)
@@ -202,6 +350,8 @@ class ParsedResume:
             "education": self.education,
             "skills": self.skills,
             "experiences": self.experiences,
+            "projects": self.projects,
+            "awards": self.awards,
             "text_length": self.text_length,
             "is_scan_like": self.is_scan_like,
             "warnings": self.warnings,
@@ -228,13 +378,20 @@ def parse_resume_text(text: str) -> ParsedResume:
     ):
         name = first_line
 
+    sections = _parse_sections(cleaned)
+    experiences = [item for item in sections if item["kind"] not in _PROJECT_KINDS | _AWARD_KINDS]
+    projects = [item for item in sections if item["kind"] in _PROJECT_KINDS]
+    awards = [item for item in sections if item["kind"] in _AWARD_KINDS]
+
     return ParsedResume(
         name=name,
         email=email,
         phone=phone,
         education=_parse_education(cleaned),
         skills=extract_skills(cleaned),
-        experiences=_parse_experiences(cleaned),
+        experiences=experiences,
+        projects=projects,
+        awards=awards,
         text_length=len(cleaned),
         is_scan_like=is_scan_like,
         warnings=warnings,

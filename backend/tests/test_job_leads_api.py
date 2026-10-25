@@ -235,3 +235,43 @@ def test_incomplete_extracted_jd_does_not_upgrade_lead(
         assert row.verification_status != "verified_official"
         assert row.last_verification_error
         assert db_session.scalar(select(Job)) is None
+
+
+def test_private_import_accepts_any_company_domain(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    """Only the link *shape* is checked: a pasted JD from 得物 must not 500."""
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="paste-any@example.com")
+        payload = {
+            "url": "https://campus.dewu.com/578078/position/list",
+            "title": "得物 校招岗位（粘贴）",
+            "company": "得物",
+            "description": "岗位职责：负责推荐算法。\n任职要求：熟悉 Python。",
+        }
+        first = client.post("/api/v1/job-leads/import", json=payload)
+        assert first.status_code == 201, first.text
+        body = first.json()["data"]
+        assert body["is_private"] is True
+        assert body["verification_status"] == "user_provided"
+        assert body["company"] == "得物"
+
+        # Same URL again is idempotent, not a duplicate.
+        second = client.post("/api/v1/job-leads/import", json=payload)
+        assert second.status_code == 201
+        assert second.json()["data"]["id"] == body["id"]
+
+        detail = client.get(f"/api/v1/job-leads/{body['id']}").json()["data"]["lead"]
+        assert "推荐算法" in (detail.get("summary") or "")
+
+
+def test_private_import_rejects_non_url(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="paste-bad@example.com")
+        response = client.post(
+            "/api/v1/job-leads/import",
+            json={"url": "not-a-url", "title": "x", "description": "y"},
+        )
+        assert response.status_code == 422

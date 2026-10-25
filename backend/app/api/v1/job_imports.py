@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, status
+from pydantic import BaseModel, HttpUrl
 
 from app.auth.dependencies import AppSettings, CurrentUser, DbSession
 from app.schemas.common import DataResponse
@@ -10,6 +13,7 @@ from app.schemas.imports import ImportPreview, ImportPreviewRequest, JobImportRe
 from app.schemas.jobs import JobDetail, job_to_detail
 from app.security.csrf import require_csrf
 from app.services.job_import_service import JobImportService
+from app.services.link_preview_service import LinkPreviewService
 
 router = APIRouter(
     prefix="/job-imports", tags=["job-imports"], dependencies=[Depends(require_csrf)]
@@ -29,6 +33,28 @@ def preview_import(
 ) -> DataResponse[ImportPreview]:
     preview = JobImportService(session, settings).preview(str(payload.url))
     return DataResponse(data=preview)
+
+
+class LinkPreviewRequest(BaseModel):
+    url: HttpUrl
+
+
+@router.post(
+    "/preview-link",
+    response_model=DataResponse[dict[str, Any]],
+    summary="用浏览器读取任意企业的岗位页，返回预览（不写库）",
+)
+def preview_link(
+    payload: LinkPreviewRequest,
+    settings: AppSettings,
+    _user: CurrentUser,
+) -> DataResponse[dict[str, Any]]:
+    """Render the page once and return a draft; saving is a separate action.
+
+    This is what makes "paste any company link" work: the server cannot fetch a
+    client-rendered page, but a headless browser can.
+    """
+    return DataResponse(data=LinkPreviewService(settings).preview(str(payload.url)))
 
 
 @router.post(

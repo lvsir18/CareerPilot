@@ -37,6 +37,7 @@ import {
   type SessionUser,
   type OfficialSearchResult,
   type OfficialSourceCompany,
+  type LinkPreview,
   type TencentImportResult,
 } from "@/lib/api";
 
@@ -648,6 +649,16 @@ export function importTencentJobs(payload: {
     method: "POST",
     body: payload,
     timeoutMs: 90_000,
+  });
+}
+
+export function previewJobLink(url: string): Promise<ApiResult<LinkPreview>> {
+  // Renders the page in a headless browser; nothing is stored until the user
+  // saves the returned draft as a private candidate.
+  return request<LinkPreview>("/api/v1/job-imports/preview-link", {
+    method: "POST",
+    body: { url },
+    timeoutMs: 45_000,
   });
 }
 

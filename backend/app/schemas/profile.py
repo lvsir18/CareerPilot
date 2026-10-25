@@ -27,6 +27,9 @@ class EducationItem(BaseModel):
 
 class ProjectItem(BaseModel):
     title: str = Field(min_length=1, max_length=200)
+    # Same shape as an internship: resumes usually state a period, and an empty
+    # value simply means "fill it in by hand".
+    time_range: str | None = Field(default=None, max_length=100)
     summary: str | None = Field(default=None, max_length=2000)
 
 

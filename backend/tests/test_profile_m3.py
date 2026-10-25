@@ -65,6 +65,13 @@ def test_apply_resume_populates_profile_but_unconfirmed(
         assert data["education"]
         assert data["education"][0]["school"] == "北京大学"
         assert data["experiences"]
+        # The resume has a 项目经历 section: it must land in the projects panel,
+        # not inside 实习与项目经历.
+        assert data["projects"]
+        assert data["projects"][0]["title"] == "基于Transformer的文本分类"
+        # The field exists even when the resume gives no period: the user fills
+        # it in by hand instead of the value being invented.
+        assert data["projects"][0]["time_range"] is None
         assert data["verified_by_user"] is False
         assert data["confirmed_at"] is None
 

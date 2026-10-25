@@ -95,10 +95,11 @@ def test_parse_resume_extracts_skills_and_experiences() -> None:
     assert "llm" in parsed.skills
     assert "rag" in parsed.skills
     assert "langchain" in parsed.skills
+    # Internships and projects are separate panels now.
     assert parsed.experiences
-    kinds = {item["kind"] for item in parsed.experiences}
-    assert "internship" in kinds
-    assert "project" in kinds
+    assert {item["kind"] for item in parsed.experiences} == {"internship"}
+    assert parsed.projects
+    assert {item["kind"] for item in parsed.projects} <= {"project", "research"}
 
 
 def test_parse_resume_short_text_is_scan_like() -> None:
@@ -128,3 +129,65 @@ def test_skill_normalizer_canonicalizes_and_distinguishes_hypernyms() -> None:
     assert "pytorch" in skills
     assert "llm" in skills
     assert "langgraph" in skills
+
+
+def test_internships_and_projects_are_separated_by_section() -> None:
+    """A real resume layout: sections, then title line + date line + bullets."""
+    text = """张三
+教育背景
+某大学 计算机 本科 2021-2025
+实习经历
+某某科技有限公司｜算法实习生
+2025.10 - 2026.01
+• 负责推荐模型训练与评估。
+项目经历
+实验室横向项目- 基于自然语言理解的语音交互软件
+2026.4 - 至今
+• 构建知识库与意图识别链路。
+GoldAgent - LLM 增强的分析系统
+2026.05 - 至今
+• 实现行情获取到报告生成的链路。
+科研经历
+多航空器轨迹预测研究
+2026 - 至今
+• 构建时空交互预测模型。
+专业技能
+Python / PyTorch
+"""
+
+    parsed = parse_resume_text(text)
+
+    assert [(item["title"], item["time_range"]) for item in parsed.experiences] == [
+        ("某某科技有限公司｜算法实习生", "2025.10 - 2026.01")
+    ]
+    titles = [item["title"] for item in parsed.projects]
+    # The project title above the date line must not be swallowed by the
+    # previous entry, and "语言" inside a title must not delete the line.
+    assert titles == [
+        "实验室横向项目- 基于自然语言理解的语音交互软件",
+        "GoldAgent - LLM 增强的分析系统",
+        "多航空器轨迹预测研究",
+    ]
+    assert parsed.projects[0]["time_range"] == "2026.04 - 至今"
+    # Skills belong to no panel and must not leak into the last project.
+    assert all("PyTorch" not in (item["description"] or "") for item in parsed.projects)
+
+
+def test_awards_are_kept_out_of_both_panels() -> None:
+    text = """张三
+实习经历
+某公司｜实习生
+2025.01 - 2025.06
+• 做了一些事。
+获奖情况
+国家励志奖学金
+综合荣誉
+优秀学生
+"""
+
+    parsed = parse_resume_text(text)
+
+    assert [item["kind"] for item in parsed.experiences] == ["internship"]
+    assert parsed.awards
+    assert all("奖学金" not in (item["title"] or "") for item in parsed.experiences)
+    assert all("奖学金" not in (item["title"] or "") for item in parsed.projects)

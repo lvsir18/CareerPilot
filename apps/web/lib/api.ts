@@ -339,7 +339,7 @@ export interface Profile {
   education: EducationItem[];
   skills: string[];
   experiences: ExperienceItem[];
-  projects: { title: string; summary: string | null }[];
+  projects: { title: string; time_range: string | null; summary: string | null }[];
   preferences: JobPreferences;
   version: number;
   verified_by_user: boolean;
@@ -352,7 +352,7 @@ export interface ProfileUpdatePayload {
   education?: EducationItem[];
   skills?: string[];
   experiences?: ExperienceItem[];
-  projects?: { title: string; summary: string | null }[];
+  projects?: { title: string; time_range?: string | null; summary: string | null }[];
   preferences?: Partial<JobPreferences>;
   verified_by_user?: boolean;
 }
@@ -947,6 +947,21 @@ export interface OfficialSearchJob {
   source_url: string;
   jd_length: number;
   requirements: number;
+}
+
+export interface LinkPreview {
+  url: string;
+  final_url: string;
+  title: string | null;
+  company: string | null;
+  city: string | null;
+  location_text: string | null;
+  job_type: string | null;
+  description: string | null;
+  requirements: string[];
+  additional_info: string;
+  warnings: string[];
+  source: "rendered";
 }
 
 export interface OfficialSourceCompany {

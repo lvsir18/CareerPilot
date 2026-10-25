@@ -22,6 +22,7 @@ from app.schemas.profile import (
     ProfileUpdate,
     ProjectItem,
 )
+from app.services.resume_parser import _PROJECT_KINDS
 
 
 def _preferences_dict(preferences: JobPreference | None) -> dict:
@@ -236,6 +237,22 @@ class ProfileService:
         profile.skills_json = normalize_string_list(
             parsed.get("skills") or [], max_items=50, max_length=50
         )
+        parsed_experiences = [
+            item for item in (parsed.get("experiences") or []) if isinstance(item, dict)
+        ]
+        parsed_projects = [
+            item for item in (parsed.get("projects") or []) if isinstance(item, dict)
+        ]
+        if "projects" not in parsed:
+            # Resumes parsed before the split kept everything in ``experiences``;
+            # re-partition them so old data still lands in the right panel.
+            parsed_projects = [
+                item for item in parsed_experiences if item.get("kind") in _PROJECT_KINDS
+            ]
+            parsed_experiences = [
+                item for item in parsed_experiences if item.get("kind") not in _PROJECT_KINDS
+            ]
+
         profile.experiences_json = [
             ExperienceItem(
                 kind=item.get("kind", "other"),
@@ -244,8 +261,18 @@ class ProfileService:
                 skills=item.get("skills") or [],
                 description=item.get("description"),
             ).model_dump()
-            for item in (parsed.get("experiences") or [])
-            if isinstance(item, dict)
+            for item in parsed_experiences
+        ]
+        profile.projects_json = [
+            ProjectItem(
+                title=(item.get("title") or "").strip()[:200],
+                time_range=item.get("time_range"),
+                summary=item.get("description"),
+            ).model_dump()
+            for item in parsed_projects
+            # ProjectItem requires a title; dropping an untitled entry is better
+            # than inventing one.
+            if (item.get("title") or "").strip()
         ]
         # Applying a resume is an edit, not a confirmation; the user still has
         # to review and confirm the resulting profile.

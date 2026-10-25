@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { importJob, importJobLead, previewJobImport } from "@/lib/client-api";
+import { importJob, importJobLead, previewJobLink, previewJobImport } from "@/lib/client-api";
 import type { JobImportPreview } from "@/lib/api";
 
 type Mode = "public_page" | "manual_paste";
@@ -20,7 +20,7 @@ interface PasteFields {
 }
 
 const EMPTY_FIELDS: PasteFields = {
-  company: "百度",
+  company: "",
   title: "",
   city: "",
   location_text: "",
@@ -35,6 +35,8 @@ export function JobImportForm() {
   const [url, setUrl] = useState("");
   const [preview, setPreview] = useState<JobImportPreview | null>(null);
   const [mode, setMode] = useState<Mode>("public_page");
+  // Which reader produced the preview: Baidu's HTML parser or the browser.
+  const [previewSource, setPreviewSource] = useState<"baidu" | "rendered">("baidu");
   const [fields, setFields] = useState<PasteFields>(EMPTY_FIELDS);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -50,12 +52,52 @@ export function JobImportForm() {
     setMessage(null);
     setPreview(null);
     const result = await previewJobImport(url.trim());
-    setBusy(false);
     if (!result.ok) {
+      // Not a Baidu page (or not parseable): let the browser read it instead of
+      // telling the user "only Baidu is supported".
+      const rendered = await previewJobLink(url.trim());
+      setBusy(false);
+      if (!rendered.ok) {
+        setMode("manual_paste");
+        setError(`${rendered.error.message}。可在下方粘贴 JD 后确认入库。`);
+        return;
+      }
+      const data = rendered.data;
+      setPreviewSource("rendered");
+      setPreview({
+        source_url: data.final_url,
+        source_job_id: "",
+        title: data.title ?? "",
+        company: data.company ?? "",
+        department: null,
+        city: data.city,
+        location_text: data.city,
+        job_type: null,
+        recruitment_program: null,
+        description: data.description,
+        requirements: [],
+        published_at: null,
+        status: "unknown",
+        source_method: "manual_import",
+        verification_status: "user_provided",
+        verified_at: null,
+        warnings: data.warnings,
+      });
       setMode("manual_paste");
-      setError(`${result.error.message}。可在下方粘贴 JD 后确认入库。`);
+      setFields((current) => ({
+        ...current,
+        company: data.company ?? current.company,
+        title: data.title ?? current.title,
+        city: data.city ?? "",
+        location_text: data.city ?? "",
+        description: data.description ?? "",
+        requirements: "",
+      }));
+      setMessage("已用浏览器读取该页面，请核对后保存为私有候选。");
       return;
     }
+    setBusy(false);
+    setPreviewSource("baidu");
     setPreview(result.data);
     setMode("public_page");
     setFields((current) => ({
@@ -118,20 +160,54 @@ export function JobImportForm() {
 
   return (
     <div className="mt-6 space-y-6">
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setMode("public_page");
+            setError(null);
+          }}
+          aria-pressed={mode === "public_page"}
+          className={`rounded-lg border px-3 py-1.5 text-sm ${
+            mode === "public_page"
+              ? "border-slate-900 bg-slate-900 text-white"
+              : "border-slate-300 bg-white text-slate-600"
+          }`}
+        >
+          链接解析（支持任意企业）
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setMode("manual_paste");
+            setError(null);
+          }}
+          aria-pressed={mode === "manual_paste"}
+          className={`rounded-lg border px-3 py-1.5 text-sm ${
+            mode === "manual_paste"
+              ? "border-amber-600 bg-amber-600 text-white"
+              : "border-slate-300 bg-white text-slate-600"
+          }`}
+        >
+          粘贴 JD（任意企业）
+        </button>
+      </div>
+
+      {mode === "manual_paste" ? null : (
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <label htmlFor="job-url" className="text-sm font-medium text-slate-800">
           官方岗位链接
         </label>
         <p className="mt-1 text-xs text-slate-500">
-          仅支持 <code className="font-mono">https://talent.baidu.com/jobs/detail/...</code>。
-          一次只读取一个页面。
+          粘<strong>岗位详情页</strong>链接（不是列表页）。百度会直接解析为公开岗位；
+          其他企业用无头浏览器读取该页，给出一份待你确认的草稿。一次只读一个页面。
         </p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <input
             id="job-url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder="https://talent.baidu.com/jobs/detail/INTERN/..."
+            placeholder="https://campus.dewu.com/578078/position/123456"
             className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
           />
           <button
@@ -146,22 +222,47 @@ export function JobImportForm() {
 
         {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
         {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
+        <p className="mt-2 text-xs text-slate-500">
+          其他企业请切到「粘贴 JD」：把官网上的 JD 复制进来即可，保存为仅本人可见的候选岗位。
+        </p>
       </section>
+      )}
+
+      {mode === "manual_paste" && error ? (
+        <p className="break-words rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+      ) : null}
 
       {preview ? (
         <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800">
-              官方页面已核验
+            <span
+              className={
+                previewSource === "baidu"
+                  ? "rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
+                  : "rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+              }
+            >
+              {previewSource === "baidu" ? "官方页面已核验" : "浏览器读取 · 待你确认"}
             </span>
-            <span className="text-xs text-slate-500">
-              岗位 ID：<span className="font-mono">{preview.source_job_id}</span>
-            </span>
+            {preview.source_job_id ? (
+              <span className="text-xs text-slate-500">
+                岗位 ID：<span className="font-mono">{preview.source_job_id}</span>
+              </span>
+            ) : null}
           </div>
-          <h2 className="mt-3 text-lg font-semibold text-slate-900">{preview.title}</h2>
+          <h2 className="mt-3 text-lg font-semibold text-slate-900">
+            {preview.title || "未识别到岗位名称"}
+          </h2>
           <p className="mt-1 text-sm text-slate-600">
-            {preview.company} · {preview.city ?? "城市未知"} · {preview.job_type ?? "类型未知"}
+            {preview.company || "企业未识别"} · {preview.city ?? "城市未知"} ·{" "}
+            {preview.job_type ?? "类型未知"}
           </p>
+          {previewSource === "rendered" ? (
+            <p className="mt-2 text-xs text-amber-800">
+              这是浏览器读到的草稿：请核对公司、岗位与 JD，然后点下方「保存为私有候选」。
+              保存后标记为“用户导入”，不会伪称已核验。
+            </p>
+          ) : null}
           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs text-slate-500">招聘项目</dt>
@@ -192,9 +293,10 @@ export function JobImportForm() {
 
       {mode === "manual_paste" ? (
         <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-5">
-          <h2 className="text-sm font-semibold text-slate-900">粘贴 JD 并确认</h2>
-          <p className="mt-1 text-xs text-slate-600">
-            仅在无法读取官方页面时使用。入库会标记为“用户已确认”，不会伪称为自动核验。
+          <h2 className="text-sm font-semibold text-slate-900">粘贴 JD 并保存</h2>
+          <p className="mt-1 text-xs leading-relaxed text-slate-600">
+            适用于任何企业（含未适配直连的 12 家）。把官网详情页的 JD 复制进来，
+            保存为**仅本人可见**的私有候选，标记为“用户导入”，不会伪称已核验。
           </p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <Field label="公司" value={fields.company} onChange={(v) => updateField("company", v)} />
