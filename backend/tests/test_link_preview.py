@@ -37,7 +37,7 @@ def test_preview_returns_a_draft_for_any_company(settings, monkeypatch) -> None:
             url=url,
             final_url="https://campus.dewu.com/578078/position/123",
             title="推荐算法实习生",
-            description="岗位职责：负责推荐模型。\n任职要求：熟悉 Python。",
+            description="岗位职责\n负责推荐模型。\n任职要求\n熟悉 Python。\n在招业务\n推荐团队",
             city="上海",
             warnings=[],
         ),
@@ -49,6 +49,9 @@ def test_preview_returns_a_draft_for_any_company(settings, monkeypatch) -> None:
     assert preview["company"] == "得物"
     assert preview["city"] == "上海"
     assert "推荐模型" in preview["description"]
+    assert "熟悉 Python" not in preview["description"]
+    assert preview["requirements"] == ["熟悉 Python。"]
+    assert preview["additional_info"] == "在招业务\n推荐团队"
     assert preview["source"] == "rendered"
 
 
@@ -67,3 +70,21 @@ def test_preview_maps_reader_failure_to_a_correctable_error(settings, monkeypatc
 
     assert exc.value.code == "LINK_PREVIEW_FAILED"
     assert "粘贴" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    ("url", "company"),
+    [
+        ("https://360campus.zhiye.com/intern/detail?jobAdId=1", "360"),
+        ("https://xiaomi.jobs.f.mioffice.cn/internship/position/1/detail", "小米"),
+        ("https://app.mokahr.com/apply/moonshot/148506#/job/1", "月之暗面 Kimi"),
+        ("https://app.mokahr.com/social-recruitment/high-flyer/140576#/job/1", "DeepSeek"),
+        ("https://app.mokahr.com/campus-recruitment/trip/117988#/job/1", "携程"),
+        ("https://app.mokahr.com/apply/moonshot/1485069#/job/1", None),
+        ("https://app.mokahr.com/apply/another-company/148506#/job/1", None),
+    ],
+)
+def test_company_labels_only_match_exact_known_ats_tenants(url, company):
+    from app.services.link_preview_service import _company_from_url
+
+    assert _company_from_url(url) == company

@@ -17,6 +17,7 @@ interface PasteFields {
   recruitment_program: string;
   description: string;
   requirements: string;
+  additional_info: string;
 }
 
 const EMPTY_FIELDS: PasteFields = {
@@ -24,10 +25,11 @@ const EMPTY_FIELDS: PasteFields = {
   title: "",
   city: "",
   location_text: "",
-  job_type: "internship",
+  job_type: "unknown",
   recruitment_program: "",
   description: "",
   requirements: "",
+  additional_info: "",
 };
 
 export function JobImportForm() {
@@ -51,8 +53,17 @@ export function JobImportForm() {
     setError(null);
     setMessage(null);
     setPreview(null);
-    const result = await previewJobImport(url.trim());
-    if (!result.ok) {
+    setFields({ ...EMPTY_FIELDS });
+    const target = url.trim();
+    let isBaidu = false;
+    try {
+      const parsed = new URL(target);
+      isBaidu = parsed.hostname === "talent.baidu.com" && parsed.pathname.startsWith("/jobs/detail/");
+    } catch {
+      // The API returns the actionable URL validation message.
+    }
+    const result = isBaidu ? await previewJobImport(target) : null;
+    if (!result || !result.ok) {
       // Not a Baidu page (or not parseable): let the browser read it instead of
       // telling the user "only Baidu is supported".
       const rendered = await previewJobLink(url.trim());
@@ -71,11 +82,11 @@ export function JobImportForm() {
         company: data.company ?? "",
         department: null,
         city: data.city,
-        location_text: data.city,
-        job_type: null,
+        location_text: data.location_text ?? data.city,
+        job_type: data.job_type,
         recruitment_program: null,
         description: data.description,
-        requirements: [],
+        requirements: data.requirements ?? [],
         published_at: null,
         status: "unknown",
         source_method: "manual_import",
@@ -84,15 +95,17 @@ export function JobImportForm() {
         warnings: data.warnings,
       });
       setMode("manual_paste");
-      setFields((current) => ({
-        ...current,
-        company: data.company ?? current.company,
-        title: data.title ?? current.title,
+      setFields({
+        ...EMPTY_FIELDS,
+        company: data.company ?? "",
+        title: data.title ?? "",
         city: data.city ?? "",
-        location_text: data.city ?? "",
+        location_text: data.location_text ?? data.city ?? "",
+        job_type: data.job_type ?? "unknown",
         description: data.description ?? "",
-        requirements: "",
-      }));
+        requirements: (data.requirements ?? []).join("\n"),
+        additional_info: data.additional_info ?? "",
+      });
       setMessage("已用浏览器读取该页面，请核对后保存为私有候选。");
       return;
     }
@@ -129,6 +142,7 @@ export function JobImportForm() {
         description: [
           fields.description,
           fields.requirements ? `\n\n任职要求：\n${fields.requirements}` : "",
+          fields.additional_info ? `\n\n${fields.additional_info}` : "",
         ]
           .join("")
           .trim(),
@@ -167,6 +181,7 @@ export function JobImportForm() {
             setMode("public_page");
             setError(null);
           }}
+          disabled={busy}
           aria-pressed={mode === "public_page"}
           className={`rounded-lg border px-3 py-1.5 text-sm ${
             mode === "public_page"
@@ -182,6 +197,7 @@ export function JobImportForm() {
             setMode("manual_paste");
             setError(null);
           }}
+          disabled={busy}
           aria-pressed={mode === "manual_paste"}
           className={`rounded-lg border px-3 py-1.5 text-sm ${
             mode === "manual_paste"
@@ -193,7 +209,6 @@ export function JobImportForm() {
         </button>
       </div>
 
-      {mode === "manual_paste" ? null : (
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <label htmlFor="job-url" className="text-sm font-medium text-slate-800">
           官方岗位链接
@@ -206,7 +221,14 @@ export function JobImportForm() {
           <input
             id="job-url"
             value={url}
-            onChange={(event) => setUrl(event.target.value)}
+            disabled={busy}
+            onChange={(event) => {
+              setUrl(event.target.value);
+              if (preview || mode === "public_page") setFields({ ...EMPTY_FIELDS });
+              setPreview(null);
+              setMessage(null);
+              setError(null);
+            }}
             placeholder="https://campus.dewu.com/578078/position/123456"
             className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
           />
@@ -220,17 +242,12 @@ export function JobImportForm() {
           </button>
         </div>
 
-        {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+        {message ? <p role="status" className="mt-3 text-sm text-emerald-700">{message}</p> : null}
         {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
         <p className="mt-2 text-xs text-slate-500">
-          其他企业请切到「粘贴 JD」：把官网上的 JD 复制进来即可，保存为仅本人可见的候选岗位。
+          若官网需要登录或页面解析失败，请切到「粘贴 JD」，补全正文后保存为私有候选。
         </p>
       </section>
-      )}
-
-      {mode === "manual_paste" && error ? (
-        <p className="break-words rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
-      ) : null}
 
       {preview ? (
         <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-5">
@@ -285,7 +302,11 @@ export function JobImportForm() {
               查看解析出的 JD
             </summary>
             <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-3 text-xs leading-relaxed text-slate-700 ring-1 ring-slate-200">
-              {preview.description ?? "未提供职位描述"}
+              {[
+                preview.description ?? "未提供职位描述",
+                preview.requirements.length ? `任职要求：\n${preview.requirements.join("\n")}` : "",
+                fields.additional_info,
+              ].filter(Boolean).join("\n\n")}
             </pre>
           </details>
         </section>
@@ -296,7 +317,7 @@ export function JobImportForm() {
           <h2 className="text-sm font-semibold text-slate-900">粘贴 JD 并保存</h2>
           <p className="mt-1 text-xs leading-relaxed text-slate-600">
             适用于任何企业（含未适配直连的 12 家）。把官网详情页的 JD 复制进来，
-            保存为**仅本人可见**的私有候选，标记为“用户导入”，不会伪称已核验。
+            保存为仅本人可见的私有候选，标记为“用户导入”，不会伪称已核验。
           </p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <Field label="公司" value={fields.company} onChange={(v) => updateField("company", v)} />
@@ -334,6 +355,16 @@ export function JobImportForm() {
             rows={4}
             className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
           />
+          <label htmlFor="pasted-additional" className="mt-3 block text-sm font-medium text-slate-800">
+            其他岗位信息（业务、福利等）
+          </label>
+          <textarea
+            id="pasted-additional"
+            value={fields.additional_info}
+            onChange={(event) => updateField("additional_info", event.target.value)}
+            rows={3}
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-sky-100"
+          />
         </section>
       ) : null}
 
@@ -341,7 +372,7 @@ export function JobImportForm() {
         <button
           type="button"
           onClick={handleImport}
-          disabled={busy || !url.trim()}
+          disabled={busy || !url.trim() || (mode === "public_page" ? !preview : !fields.title.trim() || !fields.description.trim())}
           className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy ? "处理中..." : mode === "public_page" ? "确认并入库" : "保存为私有候选"}

@@ -15,7 +15,8 @@ from app.connectors.errors import ConnectorParseError, UnsafeUrlError
 from app.connectors.rendered_page import RenderedPageReader
 from app.core.config import Settings
 from app.core.errors import AppError
-from app.search.domains import COMPANY_DOMAINS, COMPANY_NAMES
+from app.search.domains import COMPANY_DOMAINS, COMPANY_NAMES, TRUSTED_TENANTS
+from app.services.job_sections import split_job_sections
 
 # Campus sub-sites sit on different hosts than the domains used for official
 # verification, so they are only used to *label* a preview. Adding them to
@@ -27,6 +28,8 @@ _CAMPUS_HOSTS: dict[str, str] = {
     "campus.kuaishou.cn": "快手",
     "zhaopin.kuaishou.cn": "快手",
     "campus.360.cn": "360",
+    "360campus.zhiye.com": "360",
+    "xiaomi.jobs.f.mioffice.cn": "小米",
     "campus-talent.alibaba.com": "阿里巴巴",
     "career.huawei.com": "华为",
     "hr.xiaomi.com": "小米",
@@ -52,6 +55,25 @@ def _company_from_host(host: str) -> str | None:
         if host == domain or host.endswith(f".{domain}"):
             return name
     return None
+
+
+def _company_from_url(url: str) -> str | None:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    for tenant in TRUSTED_TENANTS:
+        if host == tenant.host and (
+            parsed.path == tenant.path_prefix
+            or parsed.path.startswith(tenant.path_prefix.rstrip("/") + "/")
+        ):
+            return COMPANY_NAMES.get(tenant.company)
+    # Public link on https://talent.deepseek.com/ (checked 2026-10-24).
+    # This labels a private draft; it does not expand the verified-job allowlist.
+    if host == "app.mokahr.com" and (
+        parsed.path == "/social-recruitment/high-flyer/140576"
+        or parsed.path.startswith("/social-recruitment/high-flyer/140576/")
+    ):
+        return "DeepSeek"
+    return _company_from_host(host)
 
 
 def _company_from_site_name(site_name: str | None) -> str | None:
@@ -83,11 +105,9 @@ class LinkPreviewService:
                 status_code=422,
             ) from exc
 
-        final_host = (urlsplit(snapshot.final_url).hostname or "").lower()
-        original_host = (urlsplit(snapshot.url).hostname or "").lower()
         company = (
-            _company_from_host(final_host)
-            or _company_from_host(original_host)
+            _company_from_url(snapshot.final_url)
+            or _company_from_url(snapshot.url)
             or _company_from_site_name(snapshot.site_name)
         )
         warnings = list(snapshot.warnings)
@@ -95,13 +115,20 @@ class LinkPreviewService:
             warnings.append("未能识别企业，请手动填写")
         if not snapshot.city:
             warnings.append("未能识别城市，可留空")
+        if not snapshot.job_type:
+            warnings.append("未能确定唯一岗位类型，请对照官网核对")
+        sections = split_job_sections(snapshot.description)
         return {
             "url": snapshot.url,
             "final_url": snapshot.final_url,
             "title": snapshot.title,
             "company": company,
             "city": snapshot.city,
-            "description": snapshot.description,
+            "location_text": snapshot.location_text,
+            "job_type": snapshot.job_type,
+            "description": sections.description,
+            "requirements": sections.requirements,
+            "additional_info": sections.additional_info,
             "warnings": warnings,
             "source": "rendered",
         }

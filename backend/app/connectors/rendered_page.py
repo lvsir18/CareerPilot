@@ -17,8 +17,11 @@ Boundaries (deliberate, not configurable per request):
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -43,7 +46,16 @@ JD_MARKERS = (
     "岗位要求",
     "职位要求",
     "任职资格",
+    "工作要求",
+    "任职条件",
+    "加分项",
+    "福利待遇",
+    "你将会负责",
+    "我们期望你",
     "Job Description",
+    "Responsibilities",
+    "Requirements",
+    "Qualifications",
 )
 
 # Used only to prefill a hint; the user reviews every field before saving.
@@ -68,6 +80,11 @@ CITY_HINTS = (
     "郑州",
     "珠海",
     "东莞",
+    "南通",
+    "廊坊",
+    "乌兰察布",
+    "石家庄",
+    "温州",
     "新加坡",
     "香港",
     "远程",
@@ -118,48 +135,12 @@ class PageSnapshot:
     description: str | None = None
     city: str | None = None
     site_name: str | None = None
+    job_type: str | None = None
+    location_text: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
-_EXTRACT_JS = """
-(markers) => {
-  const txt = (el) => (el && el.innerText ? el.innerText.trim() : "");
-  const pickTitle = () => {
-    const og = document.querySelector('meta[property="og:title"]');
-    const ogText = og ? (og.getAttribute("content") || "").trim() : "";
-    if (ogText) return ogText;
-    const h1 = document.querySelector("h1");
-    if (h1 && txt(h1)) return txt(h1);
-    return (document.title || "").trim();
-  };
-  const body = txt(document.body);
-  const hits = [];
-  for (const el of document.querySelectorAll("article, main, section, div, td")) {
-    const t = txt(el);
-    if (t.length < 220 || t.length > 20000) continue;
-    if (!markers.some((m) => t.includes(m))) continue;
-    hits.push(t);
-  }
-  // The innermost matching container wins; the outermost would include the
-  // whole navigation and footer.
-  hits.sort((a, b) => a.length - b.length);
-  let description = hits.length ? hits[0] : null;
-  if (!description) {
-    for (const m of markers) {
-      const i = body.indexOf(m);
-      if (i > 0) {
-        description = body.slice(Math.max(0, i - 600), i + 4000);
-        break;
-      }
-    }
-  }
-  return {
-    title: pickTitle(),
-    description,
-    siteName: (document.querySelector('meta[property="og:site_name"]') || {}).content || "",
-  };
-}
-"""
+_EXTRACT_JS = Path(__file__).with_name("job_detail_extract.js").read_text(encoding="utf-8")
 
 
 class RenderedPageReader:
@@ -179,6 +160,7 @@ class RenderedPageReader:
         return True, "可用"
 
     def read(self, url: str) -> PageSnapshot:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
 
         target = assert_public_url(url)
@@ -188,32 +170,50 @@ class RenderedPageReader:
                 launch_kwargs["executable_path"] = self._executable
             browser = pw.chromium.launch(**launch_kwargs)
             try:
-                context = browser.new_context(user_agent=USER_AGENT, locale="zh-CN")
-                page = context.new_page()
-                # Only http(s) navigation is allowed; anything else is aborted.
-                page.route(
-                    "**/*",
-                    lambda route: (
-                        route.abort()
-                        if route.request.url.split(":", 1)[0] not in {"http", "https"}
-                        else route.continue_()
-                    ),
+                context = browser.new_context(
+                    user_agent=USER_AGENT, locale="zh-CN", service_workers="block"
                 )
+                page = context.new_page()
+                # Validate requests BEFORE following redirects or loading frames.
+                # A public entry page must not become a route into the LAN.
+                public_origins: dict[str, bool] = {}
+
+                def route_public(route: Any) -> None:
+                    request_url = route.request.url
+                    parsed = urlsplit(request_url)
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+                    if origin not in public_origins:
+                        try:
+                            assert_public_url(request_url)
+                            public_origins[origin] = True
+                        except UnsafeUrlError:
+                            public_origins[origin] = False
+                    if public_origins[origin]:
+                        route.continue_()
+                    else:
+                        route.abort()
+
+                context.route("**/*", route_public)
                 try:
                     page.goto(target, wait_until="domcontentloaded", timeout=30_000)
                 except Exception as exc:
                     raise ConnectorParseError(f"打不开这个页面：{type(exc).__name__}") from exc
 
-                assert_public_url(page.url)  # re-check after redirects
-                page.wait_for_timeout(1200)
-                # Trigger lazy-loaded JD blocks.
-                page.mouse.wheel(0, 1200)
-                page.wait_for_timeout(MAX_WAIT_MS // 2)
-
-                data = page.evaluate(_EXTRACT_JS, list(JD_MARKERS))
+                assert_public_url(page.url)
+                data = self._wait_for_detail(page)
+                warnings: list[str] = []
+                if urlsplit(page.url).hostname == "career.huawei.com":
+                    try:
+                        data, direction_warnings = self._huawei_directions(page, data)
+                    except PlaywrightError as exc:
+                        raise ConnectorParseError(
+                            "未能展开官网的岗位方向，请手动选择方向并复制 JD"
+                        ) from exc
+                    warnings.extend(direction_warnings)
                 title = (data.get("title") or "").strip() or None
                 description = (data.get("description") or "").strip() or None
                 site_name = (data.get("siteName") or "").strip() or None
+                metadata = data.get("metadata") or ""
                 final_url = page.url
                 context.close()
             finally:
@@ -223,7 +223,6 @@ class RenderedPageReader:
             raise ConnectorParseError(
                 "没能从这个页面读到 JD 正文（可能需要登录，或详情是动态加载）"
             )
-        warnings: list[str] = []
         if len(description) > MAX_DESCRIPTION:
             description = description[:MAX_DESCRIPTION]
             warnings.append(f"正文超过 {MAX_DESCRIPTION} 字，已截断")
@@ -235,23 +234,128 @@ class RenderedPageReader:
             final_url=final_url,
             title=title,
             description=description,
-            city=self._guess_city(description),
+            city=self._guess_city(metadata) or self._guess_labeled_city(description),
+            location_text=self._guess_city(metadata),
+            job_type=self._guess_job_type(title, metadata),
             site_name=site_name,
             warnings=warnings,
         )
 
     @staticmethod
+    def _wait_for_detail(
+        page: Any,
+        *,
+        allow_direction_prompt: bool = True,
+        timeout_ms: int = MAX_WAIT_MS,
+        previous_description: str | None = None,
+    ) -> dict[str, Any]:
+        """Wait for actual JD content to settle, rather than one fixed sleep."""
+        started = time.monotonic()
+        deadline = started + timeout_ms / 1000
+        previous = None
+        stable = 0
+        data: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            page.wait_for_timeout(500)
+            data = page.evaluate(_EXTRACT_JS, list(JD_MARKERS))
+            text = data.get("description")
+            if text == previous_description:
+                text = None
+            stable = stable + 1 if text and text == previous else 0
+            previous = text
+            elapsed = time.monotonic() - started
+            if (
+                stable >= 3
+                and elapsed >= 2
+                and (len(data.get("sections", [])) >= 2 or elapsed >= 5)
+            ):
+                break
+            if (
+                allow_direction_prompt
+                and not text
+                and urlsplit(page.url).hostname == "career.huawei.com"
+                and page.locator(".position-intention .intention-select").count()
+            ):
+                break
+        return data
+
+    @staticmethod
+    def _huawei_directions(page: Any, data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """The public Huawei detail is blank until a direction is selected.
+
+        Read each public direction and label it explicitly; never silently
+        substitute one direction for the aggregate role in the submitted URL.
+        """
+        selector = page.locator(".position-intention .intention-select")
+        if not selector.count():
+            return data, []
+        selector.click(timeout=2000)
+        options = page.locator(".aui-select .node-label")
+        # Options are teleported outside the select on the current official UI.
+        if not options.count():
+            options = page.locator(".aui-popover .node-label")
+        names = options.all_text_contents()
+        if not names:
+            # Restrict to the select's dropdown, never arbitrary page links.
+            options = page.locator(
+                ".aui-select-dropdown .node-label, .aui-select-panel .node-label"
+            )
+            names = options.all_text_contents()
+        names = list(dict.fromkeys(name.strip() for name in names if name.strip()))
+        parts: list[str] = []
+        missing = 0
+        previous_description = None
+        deadline = time.monotonic() + 25
+        for index, name in enumerate(names[:12]):
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms < 1000:
+                missing += len(names[:12]) - index
+                break
+            if index:
+                selector.click(timeout=2000)
+            page.get_by_title(name, exact=True).last.click(timeout=2000)
+            item = RenderedPageReader._wait_for_detail(
+                page,
+                allow_direction_prompt=False,
+                timeout_ms=min(MAX_WAIT_MS, remaining_ms),
+                previous_description=previous_description,
+            )
+            description = item.get("description")
+            if description and description != previous_description:
+                parts.append(f"【岗位方向：{name.strip()}】\n{description}")
+                previous_description = description
+            else:
+                missing += 1
+        if not parts:
+            return data, []
+        data["description"] = "\n\n".join(parts)
+        warnings = [f"该岗位有多个方向，已按方向保留 {len(parts)} 份正文，请核对并保留意向方向"]
+        if missing or len(names) > 12:
+            warnings.append("部分岗位方向未能读取，请到官网选择方向后补充 JD")
+        return data, warnings
+
+    @staticmethod
     def _guess_city(text: str | None) -> str | None:
-        """Only returns a city when the page states it near a location label."""
         if not text:
             return None
-        head = text[:1200]
-        for label in ("工作地点", "工作城市", "城市", "地点", "Location"):
-            index = head.find(label)
-            if index < 0:
-                continue
-            window = head[index : index + 60]
-            for city in CITY_HINTS:
-                if city in window:
-                    return city
+        hits = [(text.find(city), city) for city in CITY_HINTS if city in text]
+        # Preserve the site's order and all advertised cities.
+        return "/".join(city for _, city in sorted(hits)) or None
+
+    @classmethod
+    def _guess_labeled_city(cls, text: str | None) -> str | None:
+        if not text:
+            return None
+        match = re.search(r"(?:工作地点|工作城市|Location)\s*[：:]?([^\n]{0,80})", text, re.I)
+        return cls._guess_city(match.group(1)) if match else None
+
+    @staticmethod
+    def _guess_job_type(title: str | None, metadata: str) -> str | None:
+        text = f"{title or ''}\n{metadata}"
+        if "实习" in text or re.search(r"\bintern(?:ship)?\b", text, re.I):
+            return "internship"
+        if "应届" in text or "校招" in text or "校园招聘" in text:
+            return "campus"
+        if "全职" in metadata:
+            return "full_time"
         return None

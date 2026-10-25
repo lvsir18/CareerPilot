@@ -658,7 +658,7 @@ export function previewJobLink(url: string): Promise<ApiResult<LinkPreview>> {
   return request<LinkPreview>("/api/v1/job-imports/preview-link", {
     method: "POST",
     body: { url },
-    timeoutMs: 45_000,
+    timeoutMs: 60_000,
   });
 }
 
