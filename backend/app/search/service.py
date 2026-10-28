@@ -40,7 +40,7 @@ from app.search.providers import (
     TavilySearchProvider,
     build_search_provider,
 )
-from app.search.taxonomy import classify_job_family
+from app.search.taxonomy import classify_job_family, job_family_matches
 
 logger = get_logger(__name__)
 
@@ -547,7 +547,9 @@ class SearchService:
                 if diag:
                     diag.dropped_filter += 1
                 continue
-            if job_family and classify_job_family(hit.title, hit.snippet) != job_family:
+            if job_family and not job_family_matches(
+                classify_job_family(hit.title, hit.snippet), job_family
+            ):
                 if diag:
                     diag.dropped_filter += 1
                 continue

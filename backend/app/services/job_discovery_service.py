@@ -23,7 +23,7 @@ from app.schemas.leads import (
 )
 from app.search.domains import COMPANY_NAMES, resolve_company
 from app.search.service import SearchService
-from app.search.taxonomy import JOB_FAMILIES, classify_job_family
+from app.search.taxonomy import classify_job_family, is_known_family, job_family_matches
 from app.services.job_lead_service import JobLeadService
 from app.services.job_service import JobService
 
@@ -81,7 +81,7 @@ class JobDiscoveryService:
         page_size: int = 20,
     ) -> DiscoveryResponse:
         selected = self._resolve_companies(companies, company)
-        if job_family and job_family not in JOB_FAMILIES:
+        if job_family and not is_known_family(job_family):
             raise AppError(
                 code="INVALID_JOB_FAMILY",
                 message="不支持的岗位方向",
@@ -281,7 +281,9 @@ class JobDiscoveryService:
             total = 0
         if job_family:
             jobs = [
-                job for job in jobs if classify_job_family(job.title, job.description) == job_family
+                job
+                for job in jobs
+                if job_family_matches(classify_job_family(job.title, job.description), job_family)
             ]
         return jobs, total
 

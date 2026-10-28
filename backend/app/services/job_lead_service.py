@@ -334,12 +334,12 @@ class JobLeadService:
                 or any(token in f"{lead.title} {lead.summary or ''}" for token in tokens)
             ]
         if job_family:
-            from app.search.taxonomy import classify_job_family
+            from app.search.taxonomy import classify_job_family, job_family_matches
 
             leads = [
                 lead
                 for lead in leads
-                if classify_job_family(lead.title, lead.summary) == job_family
+                if job_family_matches(classify_job_family(lead.title, lead.summary), job_family)
             ]
         return leads
 

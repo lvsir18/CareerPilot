@@ -71,13 +71,19 @@ const JOB_TYPES = [
 
 const JOB_FAMILIES = [
   { value: "", label: "全部方向" },
-  { value: "llm_agent", label: "LLM / Agent" },
-  { value: "algorithm_data", label: "算法 / 数据" },
-  { value: "backend", label: "后端 / 基础架构" },
-  { value: "frontend", label: "前端 / 客户端" },
+  { value: "llm", label: "大模型 / LLM" },
+  { value: "agent", label: "Agent / 应用" },
+  { value: "algorithm", label: "算法" },
+  { value: "data", label: "数据" },
+  { value: "backend", label: "后端" },
+  { value: "infra", label: "基础架构 / SRE" },
+  { value: "frontend", label: "前端 / Web" },
+  { value: "client", label: "客户端" },
+  { value: "test", label: "测试 / QA" },
+  { value: "security", label: "安全" },
   { value: "product", label: "产品" },
   { value: "design", label: "设计" },
-  { value: "operations", label: "运营 / 综合" },
+  { value: "operations", label: "运营 / 市场" },
   { value: "other", label: "其他" },
 ];
 

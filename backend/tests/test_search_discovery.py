@@ -237,11 +237,34 @@ def test_provider_registry_only_exposes_tavily_and_baidu() -> None:
 def test_job_family_classifier_is_explainable_and_falls_back() -> None:
     from app.search.taxonomy import classify_job_family
 
-    assert classify_job_family("Agent 策略工程师") == "llm_agent"
-    assert classify_job_family("推荐算法工程师") == "algorithm_data"
+    # Families were split: 算法/数据, 后端/基础架构, 前端/客户端, LLM/Agent.
+    assert classify_job_family("Agent 策略工程师") == "agent"
+    assert classify_job_family("大模型算法工程师") == "llm"
+    assert classify_job_family("推荐算法工程师") == "algorithm"
+    assert classify_job_family("数据分析师") == "data"
     assert classify_job_family("Java 后端开发") == "backend"
+    assert classify_job_family("基础架构工程师") == "infra"
     assert classify_job_family("前端工程师") == "frontend"
+    assert classify_job_family("Android 客户端开发") == "client"
+    assert classify_job_family("测试开发工程师") == "test"
+    assert classify_job_family("安全工程师") == "security"
     assert classify_job_family("行政专员") == "other"
+
+
+def test_legacy_coarse_filters_still_match_the_split_families() -> None:
+    from app.search.taxonomy import is_known_family, job_family_matches
+
+    assert is_known_family("algorithm")
+    assert is_known_family("algorithm_data")
+    assert not is_known_family("not-a-family")
+
+    assert job_family_matches("algorithm", "algorithm_data")
+    assert job_family_matches("data", "algorithm_data")
+    assert not job_family_matches("backend", "algorithm_data")
+    assert job_family_matches("llm", "llm_agent")
+    assert job_family_matches("agent", "llm_agent")
+    # A fine-grained filter no longer drags its old group along.
+    assert job_family_matches("infra", "backend") is False
 
 
 class _MultiCompanySearch:
@@ -292,7 +315,8 @@ def test_multi_company_family_filter_and_pagination(db_session, settings: Settin
     assert first.total_leads == 2
     assert first.total_pages == 2
     assert len(first.leads) == 1
-    assert first.leads[0].job_family == "llm_agent"
+    # The legacy "llm_agent" filter accepts the new split families.
+    assert first.leads[0].job_family in {"llm", "agent"}
     assert len(first.search.provider_results) == 2
 
     second = service.discover(

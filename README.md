@@ -503,6 +503,7 @@ ls backups/<时间戳>                                     # database.sql / uplo
 ## 文档索引
 
 - **使用者手册**：[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- **项目复盘（技术栈 / 架构 / 亮点 / 踩坑）**：[`docs/INTERVIEW_NOTES.md`](docs/INTERVIEW_NOTES.md)
 - 状态总览：[`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)
 - 接手开发：[`AGENTS.md`](AGENTS.md)
 - 搜索与核验：[`docs/M2_CHINA_JOB_SOURCES.md`](docs/M2_CHINA_JOB_SOURCES.md)、

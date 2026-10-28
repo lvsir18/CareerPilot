@@ -45,14 +45,23 @@ export function formatJobType(value: string | null | undefined): string {
 }
 
 const JOB_FAMILY_LABELS: Record<string, string> = {
-  llm_agent: "LLM / Agent",
-  algorithm_data: "算法 / 数据",
-  backend: "后端 / 基础架构",
-  frontend: "前端 / 客户端",
+  llm: "大模型 / LLM",
+  agent: "Agent / 应用",
+  algorithm: "算法",
+  data: "数据",
+  backend: "后端",
+  infra: "基础架构 / SRE",
+  frontend: "前端 / Web",
+  client: "客户端",
+  test: "测试 / QA",
+  security: "安全",
   product: "产品",
   design: "设计",
-  operations: "运营 / 综合",
+  operations: "运营 / 市场",
   other: "其他",
+  // Legacy coarse filters, kept so old links/labels still read correctly.
+  llm_agent: "LLM / Agent",
+  algorithm_data: "算法 / 数据",
 };
 
 export function formatJobFamily(value: string | null | undefined): string {

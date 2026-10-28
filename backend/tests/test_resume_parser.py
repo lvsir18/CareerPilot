@@ -191,3 +191,59 @@ def test_awards_are_kept_out_of_both_panels() -> None:
     assert parsed.awards
     assert all("奖学金" not in (item["title"] or "") for item in parsed.experiences)
     assert all("奖学金" not in (item["title"] or "") for item in parsed.projects)
+
+
+def test_education_parses_every_degree_with_major_and_years() -> None:
+    """A real layout: school｜college｜major｜degree, dates on the next line."""
+    text = """吕旭杰
+教育背景
+四川大学｜计算机学院｜计算机科学与技术｜硕士（推免）
+2026.09 - 2029.6
+• 研究方向：大语言模型微调与训练。
+四川大学｜软件学院｜软件工程｜本科
+2022.09 - 2026.07
+• GPA 3.60/4.00，推免综合测评排名前6%。
+获奖情况
+国家励志奖学金
+"""
+
+    parsed = parse_resume_text(text)
+
+    assert parsed.education == [
+        {
+            "school": "四川大学",
+            "major": "计算机科学与技术",
+            "degree": "硕士",
+            "start_year": 2026,
+            "graduation_year": 2029,
+        },
+        {
+            "school": "四川大学",
+            "major": "软件工程",
+            "degree": "本科",
+            "start_year": 2022,
+            "graduation_year": 2026,
+        },
+    ]
+
+
+def test_education_handles_wrapped_school_and_major_lines() -> None:
+    text = """张三
+教育背景
+2022.09 - 2026.07
+浙江大学
+计算机学院 软件工程 本科
+• 主修课程：数据结构。
+上海交通大学 电子信息 硕士 2026年入学 2029年毕业
+"""
+
+    parsed = parse_resume_text(text)
+
+    assert [item["school"] for item in parsed.education] == ["浙江大学", "上海交通大学"]
+    assert [item["major"] for item in parsed.education] == ["软件工程", "电子信息"]
+    assert parsed.education[0]["degree"] == "本科"
+    assert parsed.education[0]["start_year"] == 2022
+    assert parsed.education[0]["graduation_year"] == 2026
+    assert parsed.education[1]["degree"] == "硕士"
+    assert parsed.education[1]["start_year"] == 2026
+    assert parsed.education[1]["graduation_year"] == 2029

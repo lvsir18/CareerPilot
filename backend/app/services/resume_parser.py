@@ -59,6 +59,39 @@ _RANGE_RE = re.compile(
 
 _EDU_HEADERS = ("教育背景", "教育经历", "教育", "学历")
 
+# A short line carrying one of these words closes the education block; anything
+# longer is body text (e.g. "• 语言：CET-6") and must stay inside the block.
+_EDU_BLOCK_STOP_WORDS = (
+    "获奖",
+    "荣誉",
+    "奖学金",
+    "竞赛",
+    "技能",
+    "实习",
+    "工作",
+    "项目",
+    "科研",
+    "校园",
+    "实践",
+    "开源",
+    "证书",
+    "语言",
+    "联系方式",
+    "自我评价",
+    "个人优势",
+)
+
+_UNIVERSITY_RE = re.compile(r"[\u4e00-\u9fa5]{2,30}(?:大学|学校)")
+_COLLEGE_RE = re.compile(r"[\u4e00-\u9fa5]{2,30}学院")
+# "四川大学｜计算机学院｜计算机科学与技术｜硕士" -> one cell per field.
+_EDU_SEGMENT_RE = re.compile(r"[｜|/／·•,，、;；:：\t]+|\s+")
+# Fragments that look like a major but are labels, scores or metadata.
+_EDU_SEGMENT_NOISE_RE = re.compile(
+    r"gpa|绩点|排名|课程|方向|时间|学历|学位|入学|毕业|工作|全日制|非全日制|统招|推免|保研",
+    re.I,
+)
+_EDU_LABEL_NOISE = {"在读", "毕业", "至今", "今", "本科批", "硕士点"}
+
 
 def _mask_email(value: str) -> str:
     local, _, domain = value.partition("@")
@@ -123,41 +156,176 @@ def _extract_docx(content: bytes) -> str:
     return text[:_MAX_TEXT_LENGTH]
 
 
-def _parse_education(text: str) -> list[dict]:
-    # Only consider the education block when present; otherwise scan the head.
-    education_block = text
+def _education_block(text: str) -> str:
+    """Return the text under the education heading, ending at the next section."""
+    matched: re.Match[str] | None = None
     for header in _EDU_HEADERS:
-        match = re.search(rf"(?:^|\n)\s*{header}[^\n]*\n", text)
-        if match:
-            education_block = text[match.end() :]
+        found = re.search(rf"(?:^|\n)\s*{header}[^\n]*\n", text)
+        if found:
+            matched = found
             break
-    education_block = education_block.split("技能")[0]
-    education_block = education_block.split("经历")[0]
+    if matched is None:
+        return text
 
-    schools = _SCHOOL_RE.findall(education_block)
-    majors = _MAJOR_RE.findall(education_block)
-    degrees = _DEGREE_RE.findall(education_block)
-    graduation_years = [int(m) for m in _GRADUATION_RE.findall(education_block)] + [
-        int(m) for m in _GRADUATION_JIE_RE.findall(education_block)
+    kept: list[str] = []
+    for line in text[matched.end() :].splitlines():
+        stripped = line.strip()
+        if (
+            stripped
+            and len(stripped) <= 8
+            and not _SCHOOL_RE.search(stripped)
+            and any(word in stripped for word in _EDU_BLOCK_STOP_WORDS)
+        ):
+            break
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _edu_school(entry: list[str]) -> str | None:
+    joined = " ".join(entry)
+    universities = _UNIVERSITY_RE.findall(joined)
+    if universities:
+        return universities[0]
+    colleges = _COLLEGE_RE.findall(joined)
+    return colleges[0] if colleges else None
+
+
+def _edu_segments(line: str) -> list[str]:
+    return [segment.strip(" ()（）[]【】・") for segment in _EDU_SEGMENT_RE.split(line)]
+
+
+def _edu_is_noise_segment(segment: str) -> bool:
+    if not segment or len(segment) < 2 or len(segment) > 40:
+        return True
+    if segment in _EDU_LABEL_NOISE:
+        return True
+    if re.fullmatch(r"[\d.%/+ -]+", segment):
+        return True
+    if _YEAR_RE.search(segment) or _SCHOOL_RE.search(segment):
+        return True
+    if _DEGREE_RE.search(segment):
+        return True
+    return bool(_EDU_SEGMENT_NOISE_RE.search(segment))
+
+
+def _edu_major(entry: list[str]) -> str | None:
+    """A major is the leftover cell once school/degree/dates are removed."""
+    joined = " ".join(entry)
+    explicit = _MAJOR_RE.search(joined)
+    if explicit:
+        return explicit.group(1).strip()
+
+    # Labels live on bullet lines ("• 研究方向：…"), so probe plain lines first.
+    ordered = [line for line in entry if not _BULLET_RE.match(line)] + [
+        line for line in entry if _BULLET_RE.match(line)
     ]
+    for line in ordered:
+        for segment in _edu_segments(line):
+            if _edu_is_noise_segment(segment):
+                continue
+            return segment
+
+    # Last resort: the text between the school name and the degree keyword.
+    school = _edu_school(entry)
+    degree = _DEGREE_RE.search(joined)
+    if school and degree:
+        start = joined.find(school) + len(school)
+        candidate = joined[start : degree.start()].strip(" ()（）｜|/·,，-—\t")
+        if 2 <= len(candidate) <= 40:
+            return candidate
+    return None
+
+
+def _edu_years(entry: list[str]) -> tuple[int | None, int | None]:
+    """Pull (start_year, graduation_year) from a single education entry."""
+    joined = " ".join(entry)
+
+    range_match = _RANGE_RE.search(joined)
+    if range_match:
+        start_year = int(re.match(r"(?:19|20)\d{2}", range_match.group(1)).group(0))
+        tail = range_match.group(2).strip()
+        if tail in {"至今", "今"}:
+            return start_year, None
+        return start_year, int(re.match(r"(?:19|20)\d{2}", tail).group(0))
+
     # "2024年入学" is more common than "入学时间：2024"; prefer the former so a
     # later graduation year cannot be misread as the start year.
-    start_years = [int(m) for m in _YEAR_THEN_START_RE.findall(education_block)] + [
-        int(m) for m in _START_YEAR_RE.findall(education_block)
+    starts = [int(m) for m in _YEAR_THEN_START_RE.findall(joined)] + [
+        int(m) for m in _START_YEAR_RE.findall(joined)
     ]
+    ends = [int(m) for m in _GRADUATION_RE.findall(joined)] + [
+        int(m) for m in _GRADUATION_JIE_RE.findall(joined)
+    ]
+    if starts or ends:
+        return (starts[0] if starts else None), (ends[0] if ends else None)
 
-    if not (schools or majors or degrees or graduation_years):
+    years = [int(value) for value in _YEAR_RE.findall(joined)]
+    years = [year for year in years if 1950 <= year <= 2100]
+    if len(years) >= 2:
+        return min(years), max(years)
+    if years:
+        # A lone year on an education line is almost always graduation.
+        return None, years[0]
+    return None, None
+
+
+def _split_education_entries(block: str) -> list[list[str]]:
+    """Split the block on school names, keeping wrapped detail lines attached."""
+    entries: list[list[str]] = []
+    current: list[str] = []
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        current_text = " ".join(current)
+        university = bool(_UNIVERSITY_RE.search(line))
+        # "计算机学院" is a weak anchor: it is often just the wrapped sub-line of
+        # the entry above ("浙江大学" / "计算机学院 软件工程 本科").
+        college = bool(_COLLEGE_RE.search(line)) and not university
+        has_school = bool(_edu_school(current))
+        has_detail = bool(_DEGREE_RE.search(current_text) or _RANGE_RE.search(current_text))
+        starts_new = (
+            len(line) <= 80
+            and has_school
+            and ((university and has_detail) or (college and bool(_DEGREE_RE.search(current_text))))
+        )
+        if starts_new:
+            entries.append(current)
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        entries.append(current)
+    return entries
+
+
+def _parse_education(text: str) -> list[dict]:
+    block = _education_block(text)
+    if not block.strip():
         return []
 
-    return [
-        {
-            "school": schools[0] if schools else None,
-            "major": majors[0].strip() if majors else None,
-            "degree": degrees[0] if degrees else None,
-            "start_year": start_years[0] if start_years else None,
-            "graduation_year": graduation_years[0] if graduation_years else None,
-        }
-    ]
+    items: list[dict] = []
+    for entry in _split_education_entries(block)[:6]:
+        school = _edu_school(entry)
+        degree_match = _DEGREE_RE.search(" ".join(entry))
+        degree = degree_match.group(1) if degree_match else None
+        start_year, graduation_year = _edu_years(entry)
+        # A bare sentence could look like a major; only trust it when the entry
+        # carries a school, degree or date as corroboration.
+        has_context = bool(school or degree or start_year or graduation_year)
+        major = _edu_major(entry) if has_context else None
+        if not has_context:
+            continue
+        items.append(
+            {
+                "school": school,
+                "major": major,
+                "degree": degree,
+                "start_year": start_year,
+                "graduation_year": graduation_year,
+            }
+        )
+    return items
 
 
 def _looks_like_heading(line: str) -> bool:

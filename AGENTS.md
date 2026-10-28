@@ -221,6 +221,7 @@ make e2e         # Playwright（需先启动服务）
 ## 12. 文档索引
 
 - 使用者手册：`docs/USER_GUIDE.md`
+- 项目复盘（技术栈/架构/亮点/踩坑）：`docs/INTERVIEW_NOTES.md`
 - 状态总览：`docs/IMPLEMENTATION_STATUS.md`
 - 搜索与核验：`docs/M2_CHINA_JOB_SOURCES.md`、`docs/M2_R3_2_JD_VERIFICATION.md`、`docs/M2_R3_SEARCH_EVALUATION.md`
 - 画像与匹配：`docs/M3_ARCHITECTURE.md`、`docs/M3_MATCHING_DESIGN.md`、`docs/M3_EVALUATION.md`

@@ -14,7 +14,7 @@ from uuid import UUID
 from app.db.models.job import Job
 from app.db.models.job_lead import JobLead
 from app.schemas.profile import ProfileRead
-from app.search.taxonomy import classify_job_family
+from app.search.taxonomy import JOB_FAMILY_GROUPS, classify_job_family
 from app.services.job_feature_service import JobFeatures, extract_job_features
 from app.services.skill_normalizer import normalize_skill
 
@@ -166,11 +166,19 @@ def _skill_score(
 
 
 def _role_score(profile: ProfileRead, job: Job) -> int:
-    target_roles = {role.casefold() for role in profile.preferences.target_roles}
+    target_roles = {role.strip().casefold() for role in profile.preferences.target_roles}
     if not target_roles:
         return 50
     job_family = classify_job_family(job.title, job.description)
-    return 100 if job_family in target_roles else 0
+    for role in target_roles:
+        if role == job_family:
+            return 100
+        # Preferences saved before the split ("llm_agent", "algorithm_data")
+        # still match their fine-grained families.
+        group = JOB_FAMILY_GROUPS.get(role)
+        if group and job_family in group:
+            return 100
+    return 0
 
 
 def _preference_score(profile: ProfileRead, job: Job) -> int:
