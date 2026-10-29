@@ -230,7 +230,13 @@ def test_email_import_requires_preview_and_confirmation(
 
         application_after = client.get(f"/api/v1/applications/{application['id']}").json()["data"]
         assert application_after["status"] == "interview"
-        email_event = application_after["events"][-1]
+        # Events are ordered by occurrence time; the fixed interview date may
+        # precede the manual event created today. Find this import by identity.
+        email_event = next(
+            event
+            for event in application_after["events"]
+            if event["source_reference"] == f"email:{data['id']}"
+        )
         assert email_event["source_type"] == "email_import"
         assert email_event["verification_status"] == "email_confirmed"
 

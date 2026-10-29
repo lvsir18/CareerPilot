@@ -49,6 +49,7 @@ def _read(run) -> AgentRunRead:
         thread_id=run.thread_id,
         request_id=run.request_id,
         status=run.status,
+        input_message=(run.input_payload or {}).get("message"),
         result=run.result,
         error_code=run.error_code,
         error_summary=run.error_summary,

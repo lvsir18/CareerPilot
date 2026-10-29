@@ -58,6 +58,9 @@ class AgentRunRead(BaseModel):
     thread_id: UUID
     request_id: str
     status: str
+    # The question this run answered. The chat page rebuilds one turn per run,
+    # so the cards of a turn can stay attached to that turn after a reload.
+    input_message: str | None = None
     result: dict[str, Any] | None = None
     error_code: str | None = None
     error_summary: str | None = None

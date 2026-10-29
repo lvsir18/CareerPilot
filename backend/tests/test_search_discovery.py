@@ -348,3 +348,137 @@ def test_m2r3_fixed_query_set_has_at_least_20_queries() -> None:
         "alibaba",
         "meituan",
     }
+
+
+class _CountingSearch:
+    """Counts live-search calls so the skip path is observable."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def search(self, text, **kwargs) -> SearchOutcome:
+        self.calls += 1
+        return SearchOutcome(hits=[], providers_used=[], configured=True, licensed_configured=False)
+
+    def provider_infos(self) -> list:
+        return []
+
+    def close(self) -> None:
+        return None
+
+
+def test_multi_keyword_query_matches_any_term(db_session, settings: Settings) -> None:
+    """Agent tools join keywords ("大模型 LLM Agent"); a verbatim match is 0 rows."""
+    from tests.factories import create_job
+
+    create_job(
+        db_session,
+        title="大模型算法实习生",
+        city="北京",
+        job_type="internship",
+        description="负责大模型训练与评测。",
+        source_job_id="kw-1",
+    )
+    create_job(
+        db_session,
+        title="LLM 应用实习生",
+        city="北京",
+        job_type="internship",
+        description="负责推理服务。",
+        source_job_id="kw-2",
+    )
+    create_job(
+        db_session,
+        title="后端开发实习生",
+        city="北京",
+        job_type="internship",
+        description="负责服务端接口。",
+        source_job_id="kw-3",
+    )
+
+    service = JobDiscoveryService(db_session, settings, search_service=_CountingSearch())
+    result = service.discover(
+        user_id=__import__("uuid").uuid4(),
+        query="大模型 LLM Agent",
+        city="北京",
+        job_type="internship",
+        prefer_local=True,
+    )
+
+    titles = {job.title for job in result.jobs}
+    assert {"大模型算法实习生", "LLM 应用实习生"} <= titles
+    assert "后端开发实习生" not in titles
+
+
+def test_prefer_local_skips_live_search_when_library_has_hits(
+    db_session, settings: Settings
+) -> None:
+    from tests.factories import create_job
+
+    create_job(
+        db_session,
+        title="大模型算法实习生",
+        city="北京",
+        job_type="internship",
+        description="负责大模型训练。",
+        source_job_id="pref-1",
+    )
+    search = _CountingSearch()
+    service = JobDiscoveryService(db_session, settings, search_service=search)
+
+    result = service.discover(
+        user_id=__import__("uuid").uuid4(),
+        query="大模型",
+        city="北京",
+        job_type="internship",
+        prefer_local=True,
+    )
+
+    assert search.calls == 0
+    assert result.total_jobs >= 1
+    assert any("跳过实时检索" in warning for warning in result.search.warnings)
+
+
+def test_prefer_local_falls_back_to_live_search_when_library_is_empty(
+    db_session, settings: Settings
+) -> None:
+    search = _CountingSearch()
+    service = JobDiscoveryService(db_session, settings, search_service=search)
+
+    service.discover(
+        user_id=__import__("uuid").uuid4(),
+        query="大模型",
+        city="北京",
+        job_type="internship",
+        prefer_local=True,
+    )
+
+    assert search.calls == 1
+
+
+def test_unknown_company_is_skipped_with_a_warning(db_session, settings: Settings) -> None:
+    """One unrecognised company name must not fail the whole search."""
+    from tests.factories import create_job
+
+    create_job(
+        db_session,
+        title="大模型算法实习生",
+        company="字节跳动",
+        city="杭州",
+        job_type="internship",
+        description="负责大模型训练。",
+        source_job_id="unknown-company-1",
+    )
+    service = JobDiscoveryService(db_session, settings, search_service=_CountingSearch())
+
+    result = service.discover(
+        user_id=__import__("uuid").uuid4(),
+        query="大模型",
+        city="杭州",
+        job_type="internship",
+        companies=["bytedance", "阿里巴巴达摩院"],
+        prefer_local=True,
+    )
+
+    assert any("已忽略无法识别的企业" in warning for warning in result.search.warnings)
+    assert result.total_jobs == 1

@@ -81,9 +81,13 @@ _AGGREGATE_SYSTEM = """你是求职 Agent 结果汇总器。第一原则：回�
 - 不要自行添加时效或免责声明，系统会在需要时统一追加。
 - 只有确实执行了检索且结果为空时，才用一到两句话说明，并给出下一步建议。
 - 只能推荐 payload.matches 里的岗位，不得列出其中的职位以外的岗位。
+- matches 里 source=official 或 verification_status=verified 的岗位代表已读到官方 JD，可直接推荐；
+  verification_status=search_snippet_only 的只能作为「仅摘要线索」列出，并提示需到官网核实。
 - matches 为空时明确说明「没有符合条件的岗位」，不要改写成「最接近的岗位」并逐条推荐；
   可用一句话说明 excluded_count 个候选因企业/城市/方向不符被排除，并提示可以放宽条件。
-- agent_results 里可能出现不在 matches 中的岗位描述，一律忽略，不要当作推荐。"""
+- matches 里的岗位没有 match_score 时，不要因此说「匹配结果为空」或「没找到」，
+  按检索结果正常列出即可；不得引入 matches 之外的新岗位。
+- agent_results 可以补充岗位门槛、方向分布等细节，但其中的岗位必须已在 matches 中。"""
 
 # Appended verbatim when the tools report that no new outbound search happened,
 # so the freshness caveat never depends on the model following instructions.
@@ -244,6 +248,13 @@ def _execute(ctx: RuntimeContext, agents: dict[str, object]):
             data = item.get("data")
             if isinstance(data, dict) and data.get("error"):
                 message = f"{item.get('tool')}: {data['error']}"
+                # Keep the readable reason next to the code: a bare "TOOL_FAILED"
+                # tells neither the user nor the next debugging session anything.
+                detail = data.get("message")
+                if isinstance(detail, str):
+                    detail = detail.strip()
+                    if detail and detail != data["error"]:
+                        message = f"{message}（{detail[:120]}）"
                 if message not in errors:
                     errors.append(message)
 
@@ -338,22 +349,95 @@ def _match_mismatch(
     return None
 
 
+def _search_entry(
+    job: dict[str, Any],
+    *,
+    company: str | None = None,
+    default_status: str | None = None,
+    source: str,
+) -> dict[str, Any]:
+    """Normalise a search/official-import posting for the summarizer.
+
+    URLs are left out on purpose: the answer's links come from ``agent_results``,
+    and carrying them here only inflates the summarizer prompt (which then hit
+    the 30s model timeout once the search results were actually included).
+    """
+    return {
+        "company": job.get("company") or company,
+        "title": job.get("title"),
+        "city": job.get("city"),
+        "job_type": job.get("job_type"),
+        "verification_status": job.get("verification_status") or default_status,
+        "match_score": None,
+        "eligibility_status": None,
+        "source": source,
+    }
+
+
+def _search_scope_mismatch(
+    entry: dict[str, Any], companies: list[str], cities: list[str]
+) -> str | None:
+    """Search hits are already keyword-filtered upstream; only scope is checked.
+
+    A missing city/company is kept on purpose: dropping it would hide a real
+    posting just because the source omitted the field.
+    """
+    company = str(entry.get("company") or "")
+    city = str(entry.get("city") or "")
+    if companies and company and not any(name and name in company for name in companies):
+        return "不在本轮限定的企业范围"
+    if cities and city and not any(name and name in city for name in cities):
+        return "不在本轮限定的城市范围"
+    return None
+
+
 def _match_summary(
     tool_results: list[dict[str, Any]],
+    constraints: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Flatten the filtered results into what the summarizer may recommend."""
+    """Flatten the filtered results into what the summarizer may recommend.
+
+    Search/import tools must be included: a pure ``job_search`` intent never
+    calls the matching tools, so an empty ``matches`` made the answer claim
+    "no jobs found" while 31 verified postings sat in the result cards.
+    """
+    companies = [str(item) for item in (constraints or {}).get("companies") or [] if item]
+    cities = [str(item) for item in (constraints or {}).get("cities") or [] if item]
     included: list[dict[str, Any]] = []
     excluded = 0
     for item in tool_results:
         data = item.get("data")
         if not isinstance(data, dict):
             continue
+        tool = item.get("tool")
         # The card builder accepts both contracts; the answer must do so too.
-        if item.get("tool") == "match_job":
+        if tool == "match_job":
             entries = [data] if isinstance(data.get("job"), dict) else []
-        elif item.get("tool") == "recommend_jobs":
+        elif tool == "recommend_jobs":
             entries = data.get("items") or []
         else:
+            if tool == "search_jobs":
+                postings = [
+                    _search_entry(job, source="search") for job in data.get("jobs") or []
+                ] + [
+                    _search_entry(lead, default_status="search_snippet_only", source="search")
+                    for lead in data.get("leads") or []
+                ]
+            elif tool == "import_official_jobs":
+                postings = [
+                    _search_entry(
+                        job,
+                        company=data.get("company"),
+                        default_status="verified",
+                        source="official",
+                    )
+                    for job in data.get("jobs") or []
+                ]
+            else:
+                continue
+            included.extend(
+                entry for entry in postings if not _search_scope_mismatch(entry, companies, cities)
+            )
             continue
         for entry in entries:
             if not isinstance(entry, dict):
@@ -370,7 +454,18 @@ def _match_summary(
                 }
             )
         excluded += len(data.get("extra_items") or [])
-    return included, excluded
+    # The same posting often arrives from several tools (search hit + official
+    # import). De-duplicate and bound the list: an unbounded match list made the
+    # summarizer prompt slow enough to time out.
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in included:
+        key = (str(entry.get("company") or ""), str(entry.get("title") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(entry)
+    return unique[:40], excluded
 
 
 def _split_matches(
@@ -407,6 +502,50 @@ def _split_matches(
             else:
                 output.append(item)
             continue
+        if tool in {"search_jobs", "import_official_jobs"}:
+            # Scope filtering must reach the cards too: a 杭州 search used to
+            # render 75 cards (every city) next to an answer listing only杭州.
+            company = data.get("company")
+            if tool == "search_jobs":
+                kept = {
+                    "jobs": [
+                        job
+                        for job in data.get("jobs") or []
+                        if not _search_scope_mismatch(
+                            _search_entry(job, source="search"), companies, cities
+                        )
+                    ],
+                    "leads": [
+                        lead
+                        for lead in data.get("leads") or []
+                        if not _search_scope_mismatch(
+                            _search_entry(
+                                lead, default_status="search_snippet_only", source="search"
+                            ),
+                            companies,
+                            cities,
+                        )
+                    ],
+                }
+            else:
+                kept = {
+                    "jobs": [
+                        job
+                        for job in data.get("jobs") or []
+                        if not _search_scope_mismatch(
+                            _search_entry(
+                                job,
+                                company=company,
+                                default_status="verified",
+                                source="official",
+                            ),
+                            companies,
+                            cities,
+                        )
+                    ]
+                }
+            output.append({"tool": tool, "data": {**data, **kept}})
+            continue
         if tool != "recommend_jobs":
             output.append(item)
             continue
@@ -440,11 +579,17 @@ def _aggregate(model: BaseChatModel):
         )
         # The summarizer used to receive only tool results, so a profile question
         # was answered as an empty job search. Pass the question and intent along.
-        included, excluded = _match_summary(tool_results)
+        included, excluded = _match_summary(tool_results, state.get("constraints") or {})
+        # Sub-agent prose can run to several KB each; the summarizer only needs
+        # enough to describe the门槛, so truncation keeps the prompt fast.
+        agent_results = {
+            key: (value[:4000] if isinstance(value, str) else value)
+            for key, value in results.items()
+        }
         payload = {
             "question": _original_question(state),
             "intent": state.get("intent", ""),
-            "agent_results": results,
+            "agent_results": agent_results,
             "facts": _answer_facts(tool_results),
             # The answer may only list these; everything else was filtered out by
             # the user's own company/city/direction constraints.

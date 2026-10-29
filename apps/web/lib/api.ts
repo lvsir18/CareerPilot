@@ -414,6 +414,12 @@ export interface AgentThread {
 export interface AgentMessage {
   role: string;
   content: string;
+  /**
+   * Result cards produced by the same turn as this answer. Cards live on the
+   * message instead of a page-level panel so they never drift below a newer
+   * question or disappear when another turn finishes.
+   */
+  cards?: AgentRunResult["structured"] | null;
 }
 
 export interface DashboardCounts {
@@ -881,6 +887,8 @@ export interface AgentRun {
   thread_id: string;
   request_id: string;
   status: string;
+  /** The question this run answered; null for HITL resume runs. */
+  input_message?: string | null;
   result: AgentRunResult | null;
   error_code: string | null;
   error_summary: string | null;

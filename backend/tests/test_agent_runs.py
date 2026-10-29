@@ -424,3 +424,101 @@ def test_cancel_request_is_seen_after_external_update(
         other.close()
 
     assert service.is_cancel_requested(run_id) is True
+
+
+def _create_running_run(app: FastAPI, settings: Settings, db_session: Session, email: str):
+    from datetime import UTC, datetime, timedelta
+
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email=email)
+        thread = client.post("/api/v1/agent/threads").json()["data"]
+        created = client.post(
+            "/api/v1/agent/runs",
+            json={
+                "thread_id": thread["id"],
+                "request_id": f"req-{email}",
+                "message": "帮我找北京的大模型实习",
+            },
+        ).json()["data"]
+
+    run = db_session.get(AgentRun, uuid.UUID(created["id"]))
+    assert run is not None
+    run.status = "running"
+    run.started_at = datetime.now(UTC) - timedelta(seconds=1200)
+    db_session.commit()
+    return run
+
+
+def test_run_list_exposes_the_question_it_answered(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    """The chat page rebuilds one turn per run; it needs the question text."""
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="run-input@example.com")
+        thread = client.post("/api/v1/agent/threads").json()["data"]
+        created = client.post(
+            "/api/v1/agent/runs",
+            json={
+                "thread_id": thread["id"],
+                "request_id": "req-input",
+                "message": "帮我找北京的大模型实习",
+            },
+        )
+        assert created.status_code == 202, created.text
+
+        runs = client.get(f"/api/v1/agent/threads/{thread['id']}/runs").json()["data"]
+
+    assert runs[0]["input_message"] == "帮我找北京的大模型实习"
+
+
+def test_reconcile_marks_runs_orphaned_by_a_dead_worker(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    """A restart mid-run used to leave the row ``running`` forever."""
+    from app.agents.run_service import AgentRunService
+
+    run = _create_running_run(app, settings, db_session, "reconcile-orphan@example.com")
+
+    fixed = AgentRunService(db_session).reconcile_stale_runs()
+
+    db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.error_code == "RUN_INTERRUPTED"
+    assert run.finished_at is not None
+    assert fixed == [{"run_id": str(run.id), "status": "failed"}]
+
+
+def test_reconcile_honours_cancel_without_a_live_worker(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.agents.run_service import AgentRunService
+
+    run = _create_running_run(app, settings, db_session, "reconcile-cancel@example.com")
+    run.cancel_requested_at = datetime.now(UTC) - timedelta(seconds=120)
+    db_session.commit()
+
+    fixed = AgentRunService(db_session).reconcile_stale_runs()
+
+    db_session.refresh(run)
+    assert run.status == "cancelled"
+    assert run.error_code is None
+    assert fixed == [{"run_id": str(run.id), "status": "cancelled"}]
+
+
+def test_reconcile_leaves_live_runs_alone(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.agents.run_service import AgentRunService
+
+    run = _create_running_run(app, settings, db_session, "reconcile-live@example.com")
+    run.started_at = datetime.now(UTC) - timedelta(seconds=30)
+    db_session.commit()
+
+    assert AgentRunService(db_session).reconcile_stale_runs() == []
+
+    db_session.refresh(run)
+    assert run.status == "running"

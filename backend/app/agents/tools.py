@@ -16,10 +16,10 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 
 from app.agents.runtime import RunCancelled, RuntimeContext
 from app.core.errors import AppError
+from app.core.logging import get_logger
 from app.db.models.application import Application
 from app.db.models.job import Job
 from app.schemas.applications import application_staleness
@@ -31,6 +31,8 @@ from app.services.official_jobs_service import OfficialJobsService
 from app.services.profile_service import ProfileService
 from app.services.recommendation_service import RecommendationService
 from app.services.tencent_campus_service import TencentCampusService
+
+logger = get_logger(__name__)
 
 
 class SearchJobsInput(BaseModel):
@@ -126,6 +128,9 @@ def build_job_tools(ctx: RuntimeContext) -> list:
             job_type=(job_types[0] if len(job_types) == 1 else None),
             page=1,
             page_size=min(limit, 30),
+            # Library hits are enough for an agent answer; only fall back to the
+            # (budget-limited, ~20 queries per call) live search when it is empty.
+            prefer_local=True,
         )
         # Leads come from the shared database pool, so a repeat query (or an
         # exhausted search budget) still returns rows without new evidence.
@@ -152,8 +157,22 @@ def build_job_tools(ctx: RuntimeContext) -> list:
     @tool("get_job_detail")
     @_safe_tool(ctx)
     def get_job_detail(job_id: str) -> dict[str, Any]:
-        """读取已核验岗位的完整 JD 详情。"""
-        job = JobService(ctx.session, ctx.settings).get_job(UUID(job_id))
+        """读取已核验岗位的完整 JD 详情。
+
+        ``job_id`` 只接受 search_jobs 返回的 ``jobs[].id``（内部 UUID）或官网岗位编号；
+        ``leads[].id`` 属于搜索候选，没有完整 JD，必须改用 get_job_leads。
+        """
+        job = JobService(ctx.session, ctx.settings).find_job(job_id)
+        if job is None:
+            raise AppError(
+                code="JOB_NOT_FOUND",
+                message=(
+                    "岗位不存在或已不可见：job_id 只接受 search_jobs 的 jobs[].id "
+                    "或官网岗位编号；若该 id 来自 leads，请改用 get_job_leads "
+                    "或直接打开其 official_url"
+                ),
+                status_code=404,
+            )
         return {
             "id": str(job.id),
             "company": job.company.name,
@@ -477,15 +496,12 @@ def build_progress_tools(ctx: RuntimeContext) -> list:
 
 
 def _find_job(ctx: RuntimeContext, identifier: str) -> Job | None:
-    """Resolve a job by internal UUID or by its official posting number."""
-    statement = select(Job)
-    try:
-        job_id = UUID(identifier)
-    except (TypeError, ValueError):
-        statement = statement.where(Job.source_job_id == identifier)
-    else:
-        statement = statement.where(Job.id == job_id)
-    return ctx.session.execute(statement.limit(1)).scalar_one_or_none()
+    """Resolve a job by internal UUID or by its official posting number.
+
+    Delegated to the service so agent tools and API handlers share one lookup
+    (including the demo-visibility rule) instead of hand-rolling SQL.
+    """
+    return JobService(ctx.session, ctx.settings).find_job(identifier)
 
 
 def _safe_tool(ctx: RuntimeContext):
@@ -511,6 +527,13 @@ def _safe_tool(ctx: RuntimeContext):
                     result = {"error": "RUN_CANCELLED", "message": "用户已取消该任务"}
                     ctx.record_tool(fn.__name__, result)
                     return result
+                emit = ctx.on_event
+                if emit:
+                    # Long tools (official-site crawls, 20-query web searches)
+                    # used to show a frozen "sub-task running" for minutes. The
+                    # emit also doubles as a cancellation checkpoint: it re-reads
+                    # cancel_requested_at and raises AgentRunCancelled.
+                    emit("tool.started", {"tool": fn.__name__})
                 try:
                     result = fn(*args, **kwargs)
                 except RunCancelled:
@@ -518,8 +541,23 @@ def _safe_tool(ctx: RuntimeContext):
                 except AppError as exc:
                     result = {"error": exc.code, "message": exc.message}
                 except Exception as exc:
+                    # The run only keeps the error code, so the message would be
+                    # lost forever without this log line (that is what made an
+                    # upstream "zero results" bug look like an opaque failure).
+                    logger.warning(
+                        "agent_tool_failed",
+                        extra={
+                            "tool": fn.__name__,
+                            "error_type": type(exc).__name__,
+                            "detail": str(exc)[:300],
+                        },
+                        exc_info=True,
+                    )
                     result = {"error": "TOOL_FAILED", "message": str(exc)[:300]}
                 ctx.record_tool(fn.__name__, result)
+                if emit:
+                    failed = isinstance(result, dict) and "error" in result
+                    emit("tool.completed", {"tool": fn.__name__, "ok": not failed})
                 return result
 
         wrapper.__signature__ = signature

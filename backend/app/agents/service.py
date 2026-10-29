@@ -45,6 +45,13 @@ def _structure_tool_results(tool_results: list[dict[str, Any]]) -> dict[str, lis
         if tool == "search_jobs":
             structured["jobs"].extend(data.get("jobs") or [])
             structured["jobs"].extend(data.get("leads") or [])
+        elif tool == "import_official_jobs":
+            # Official imports carry full JDs; without this the answer listed
+            # jobs that never showed up as cards (Tencent omits ``company``).
+            company = data.get("company")
+            for job in data.get("jobs") or []:
+                if isinstance(job, dict):
+                    structured["jobs"].append({"company": company, **job})
         elif tool == "get_job_detail":
             structured["jobs"].append(data)
         elif tool == "recommend_jobs":
@@ -112,10 +119,16 @@ class AgentService:
         return _summarize(result)
 
     def resume(
-        self, user: User, thread_id: str, approve: bool, cancel_check=None
+        self, user: User, thread_id: str, approve: bool, on_event=None, cancel_check=None
     ) -> dict[str, Any]:
         with checkpoint_saver(self._settings) as saver:
-            app = self._compile(user, saver, cancel_check=cancel_check, resume_approval=approve)
+            app = self._compile(
+                user,
+                saver,
+                on_event=on_event,
+                cancel_check=cancel_check,
+                resume_approval=approve,
+            )
             config = {"configurable": {"thread_id": _thread_key(user.id, thread_id)}}
             result = app.invoke(Command(resume=approve), config=config)
             # Approving may still hit the confirmation gate again; the graph can

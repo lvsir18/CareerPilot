@@ -208,6 +208,9 @@ def test_hitl_resume_worker_respects_decision_and_confirmation(
             assert resumed_events[-1] == "run.completed"
         elif confirmed_at_execution:
             assert calls == ["profile", "job_match"]
+            # The resume path must stream progress too; it used to emit nothing
+            # between run.started and the final status.
+            assert "agent.started" in resumed_events
             assert resumed_events[-1] == "run.completed"
         else:
             assert calls == []
@@ -233,6 +236,49 @@ def test_understand_resets_previous_turn_results(settings) -> None:
     assert update["agent_results"] == {}
     assert update["errors"] == []
     assert update["final_answer"] is None
+
+
+def test_execute_keeps_readable_tool_error_message() -> None:
+    """A failed tool must report *why*: "TOOL_FAILED" alone is not actionable."""
+    from app.agents.supervisor import _execute
+
+    class _FakeContext:
+        session = None
+        user = None
+        resume_approval = None
+        on_event = None
+        cancel_check = None
+
+        def __init__(self) -> None:
+            self.tool_results: list[dict] = []
+
+        def ensure_active(self) -> None:
+            return None
+
+    node = _execute(_FakeContext(), {})
+    state = {
+        "messages": [HumanMessage(content="找成都的实习")],
+        "constraints": {"required_agents": []},
+        "tool_results": [
+            {
+                "tool": "import_official_jobs",
+                "data": {
+                    "error": "TOOL_FAILED",
+                    "message": "腾讯校招搜索结果缺少 positionList",
+                },
+            }
+        ],
+        "agent_results": {},
+        "errors": [],
+    }
+
+    update = node(state)
+
+    assert update["errors"] == [
+        "import_official_jobs: TOOL_FAILED（腾讯校招搜索结果缺少 positionList）"
+    ]
+    # A tool error means the business task did not succeed.
+    assert update["status"] == "partial"
 
 
 def test_answer_facts_only_carries_progress_tools() -> None:
@@ -360,6 +406,134 @@ def test_match_summary_separates_included_from_excluded() -> None:
     assert excluded == 2
 
 
+def test_split_matches_filters_search_cards_by_city() -> None:
+    """Cards must obey the same city/company scope as the answer text."""
+    from app.agents.supervisor import _split_matches
+
+    tool_results = [
+        {
+            "tool": "search_jobs",
+            "data": {
+                "jobs": [
+                    {"company": "字节跳动", "title": "杭州岗位", "city": "杭州"},
+                    {"company": "字节跳动", "title": "北京岗位", "city": "北京"},
+                ],
+                "leads": [
+                    {"company": "百度", "title": "杭州线索", "city": "杭州"},
+                    {"company": "百度", "title": "上海线索", "city": "上海"},
+                ],
+            },
+        },
+        {
+            "tool": "import_official_jobs",
+            "data": {
+                "company": "腾讯",
+                "jobs": [{"title": "成都岗位", "city": "成都"}],
+            },
+        },
+    ]
+
+    output = _split_matches(tool_results, {"cities": ["杭州"]})
+
+    search = next(item for item in output if item["tool"] == "search_jobs")
+    assert [job["title"] for job in search["data"]["jobs"]] == ["杭州岗位"]
+    assert [lead["title"] for lead in search["data"]["leads"]] == ["杭州线索"]
+    official = next(item for item in output if item["tool"] == "import_official_jobs")
+    assert official["data"]["jobs"] == []
+
+
+def test_match_summary_includes_search_results() -> None:
+    """A pure job_search turn never calls the match tools.
+
+    An empty ``matches`` used to make the summarizer answer "no jobs found"
+    while dozens of verified postings sat in the result cards.
+    """
+    from app.agents.supervisor import _match_summary
+
+    tool_results = [
+        {
+            "tool": "search_jobs",
+            "data": {
+                "jobs": [
+                    {
+                        "id": "job-1",
+                        "company": "字节跳动",
+                        "title": "AI Agent开发实习生",
+                        "city": "北京",
+                        "job_type": "internship",
+                        "source_url": "https://jobs.example/job-1",
+                        "verification_status": "verified",
+                    }
+                ],
+                "leads": [
+                    {
+                        "id": "lead-2",
+                        "company": "百度",
+                        "title": "大模型平台后端实习生",
+                        "city": "北京",
+                        "official_url": "https://jobs.example/lead-2",
+                        "verification_status": "search_snippet_only",
+                    }
+                ],
+            },
+        },
+        {
+            "tool": "import_official_jobs",
+            "data": {
+                "company": "腾讯",
+                "jobs": [
+                    {
+                        "title": "游戏AI算法研究",
+                        "city": "成都",
+                        "job_type": "internship",
+                        "source_url": "https://jobs.example/job-3",
+                    }
+                ],
+            },
+        },
+    ]
+
+    included, excluded = _match_summary(tool_results, {"cities": ["北京"]})
+
+    assert [item["title"] for item in included] == [
+        "AI Agent开发实习生",
+        "大模型平台后端实习生",
+    ]
+    assert included[0]["source"] == "search"
+    assert included[0]["verification_status"] == "verified"
+    assert included[1]["verification_status"] == "search_snippet_only"
+    # Out-of-scope postings are dropped instead of being recommended.
+    assert "游戏AI算法研究" not in [item["title"] for item in included]
+    assert excluded == 0
+
+
+def test_match_summary_inherits_company_for_official_imports() -> None:
+    from app.agents.supervisor import _match_summary
+
+    tool_results = [
+        {
+            "tool": "import_official_jobs",
+            "data": {
+                "company": "腾讯",
+                "jobs": [
+                    {
+                        "title": "游戏AI算法研究",
+                        "city": "成都",
+                        "job_type": "internship",
+                        "source_url": "https://join.qq.com/post_detail.html?postid=1",
+                    }
+                ],
+            },
+        }
+    ]
+
+    included, _ = _match_summary(tool_results, {"companies": ["腾讯"]})
+
+    assert included[0]["company"] == "腾讯"
+    assert included[0]["source"] == "official"
+    assert included[0]["verification_status"] == "verified"
+
+
 def test_single_job_result_reaches_answer_and_cards() -> None:
     from app.agents.service import _structure_tool_results
     from app.agents.supervisor import _aggregate
@@ -386,3 +560,34 @@ def test_single_job_result_reaches_answer_and_cards() -> None:
     assert result["final_answer"] == "匹配 72 分"
     assert payloads[0]["matches"][0]["title"] == entry["job"]["title"]
     assert _structure_tool_results(result["tool_results"])["matches"] == [entry]
+
+
+def test_structure_tool_results_includes_official_imports() -> None:
+    """Jobs listed in the answer must also be rendered as cards."""
+    from app.agents.service import _structure_tool_results
+
+    structured = _structure_tool_results(
+        [
+            {
+                "tool": "search_jobs",
+                "data": {
+                    "jobs": [{"id": "1", "title": "搜索到的岗位"}],
+                    "leads": [{"id": "2", "title": "摘要线索"}],
+                },
+            },
+            {
+                "tool": "import_official_jobs",
+                "data": {
+                    "company": "腾讯",
+                    "jobs": [{"title": "游戏AI算法研究", "city": "成都"}],
+                },
+            },
+        ]
+    )
+
+    assert [item.get("title") for item in structured["jobs"]] == [
+        "搜索到的岗位",
+        "摘要线索",
+        "游戏AI算法研究",
+    ]
+    assert structured["jobs"][2]["company"] == "腾讯"

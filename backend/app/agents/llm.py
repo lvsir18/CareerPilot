@@ -29,7 +29,9 @@ def build_chat_model(settings: Settings) -> BaseChatModel | None:
         api_key=settings.llm_api_key,
         model=settings.llm_model,
         temperature=settings.llm_temperature,
-        timeout=30,
+        # The summarizer receives every sub-agent answer plus the result list;
+        # 30s was not enough once search results were actually included.
+        timeout=60,
         max_retries=1,
     )
 

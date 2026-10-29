@@ -16,6 +16,9 @@ from app.agents.tools import (
 
 JOB_SEARCH_PROMPT = """你是招聘岗位搜索助手。职责：
 - 调用 search_jobs / get_job_detail / get_job_leads 获取真实岗位。
+- 城市只放 cities，不要写进 keywords（"成都 大模型" 会搜出大量无关结果）。
+- keywords 一次给全同义词（如 [大模型, LLM, Agent]），同一组 keywords + companies
+  不要重复调用 search_jobs；需要扩大范围时换公司或换关键词，而不是重跑同一组。
 - 只有摘要的 JobLead 不能当作完整 JD。
 - 无官方发布日期时标记"未知"，"最近发现"不等于"最近发布"。
 - 搜索不到不代表企业没有招聘；不伪造职位数量或开放状态。

@@ -113,3 +113,45 @@ def test_search_rejects_error_payload():
     client = FakeClient(search={"status": 500, "message": "system busy", "data": None})
     with pytest.raises(ConnectorParseError):
         _connector(client).search("算法")
+
+
+def test_search_treats_null_position_list_as_no_match():
+    """A zero-result query answers ``positionList: null``, not ``[]``.
+
+    Treating that as a broken schema used to abort the whole agent step with an
+    opaque ``import_official_jobs: TOOL_FAILED``.
+    """
+    client = FakeClient(search={"status": 0, "data": {"positionList": None, "count": 0}})
+
+    assert _connector(client).search("成都") == []
+
+
+def test_search_rejects_malformed_position_list():
+    client = FakeClient(search={"status": 0, "data": {"positionList": "oops"}})
+    with pytest.raises(ConnectorParseError):
+        _connector(client).search("算法")
+
+
+def test_import_jobs_turns_connector_errors_into_business_errors(monkeypatch):
+    from app.core.errors import AppError
+    from app.services import tencent_campus_service as module
+
+    class BrokenConnector:
+        def __init__(self, settings) -> None:
+            pass
+
+        def search(self, *args, **kwargs):
+            raise ConnectorParseError("腾讯校招接口返回异常：system busy")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(module, "TencentCampusConnector", BrokenConnector)
+    service = module.TencentCampusService(session=None, settings=Settings())
+
+    with pytest.raises(AppError) as excinfo:
+        service.import_jobs(keyword="成都", project="日常实习")
+
+    # A connector error must not reach the agent tool wrapper as TOOL_FAILED.
+    assert excinfo.value.code == "TENCENT_CAMPUS_UNAVAILABLE"
+    assert "腾讯校招接口返回异常" in excinfo.value.message

@@ -21,6 +21,7 @@ from app.schemas.leads import (
     SearchStatusRead,
     lead_to_read,
 )
+from app.search.base import SearchOutcome
 from app.search.domains import COMPANY_NAMES, resolve_company
 from app.search.service import SearchService
 from app.search.taxonomy import classify_job_family, is_known_family, job_family_matches
@@ -44,24 +45,37 @@ class JobDiscoveryService:
         self._search = search_service or SearchService(settings)
         self._leads = lead_service or JobLeadService(session, settings)
 
-    def _resolve_companies(self, companies: list[str] | None, company: str | None) -> list[str]:
+    def _resolve_companies(
+        self, companies: list[str] | None, company: str | None
+    ) -> tuple[list[str], list[str]]:
+        """Return ``(resolved_keys, unknown_values)``.
+
+        Agent tools routinely pass a company name that has no configured
+        official domain ("阿里巴巴达摩院"). Failing the whole search for one
+        unknown name turned a usable answer into ``partial``; the caller now
+        skips it and reports it as a warning instead.
+        """
         requested = list(companies or [])
         if company:
             requested.append(company)
         if not requested:
-            return []
+            return [], []
         resolved: list[str] = []
+        unknown: list[str] = []
         for value in requested:
             key = resolve_company(value)
             if key is None:
-                raise AppError(
-                    code="INVALID_COMPANY",
-                    message="暂不支持该企业，仅支持已配置的官方招聘域名",
-                    status_code=422,
-                )
+                unknown.append(str(value))
+                continue
             if key not in resolved:
                 resolved.append(key)
-        return resolved
+        if not resolved:
+            raise AppError(
+                code="INVALID_COMPANY",
+                message="暂不支持该企业，仅支持已配置的官方招聘域名",
+                status_code=422,
+            )
+        return resolved, unknown
 
     def discover(
         self,
@@ -79,8 +93,9 @@ class JobDiscoveryService:
         sort: str = "relevance",
         page: int = 1,
         page_size: int = 20,
+        prefer_local: bool = False,
     ) -> DiscoveryResponse:
-        selected = self._resolve_companies(companies, company)
+        selected, unknown_companies = self._resolve_companies(companies, company)
         if job_family and not is_known_family(job_family):
             raise AppError(
                 code="INVALID_JOB_FAMILY",
@@ -103,16 +118,41 @@ class JobDiscoveryService:
         page_size = min(max(page_size, 1), 50)
         search_limit = min(page_size * page, 50)
 
-        outcome = self._search.search(
-            query or "",
-            company_keys=selected,
-            city=city,
-            job_type=job_type,
-            job_family=job_family,
-            limit=search_limit,
-            user_id=user_id,
+        jobs, _job_total = self._local_jobs(
+            query,
+            selected,
+            city,
+            job_type,
+            job_family,
+            days,
+            sort,
+            published_within_days,
+            verification,
         )
+        # The library usually already answers an agent ask, and one live search
+        # fans out to ~20 Tavily queries. Skipping it keeps a single run from
+        # draining the whole daily budget (which then rejects later searches).
+        if prefer_local and jobs:
+            outcome = SearchOutcome(
+                hits=[],
+                providers_used=[],
+                configured=True,
+                licensed_configured=False,
+                warnings=["岗位库已有命中，本轮跳过实时检索"],
+            )
+        else:
+            outcome = self._search.search(
+                query or "",
+                company_keys=selected,
+                city=city,
+                job_type=job_type,
+                job_family=job_family,
+                limit=search_limit,
+                user_id=user_id,
+            )
         warnings = list(outcome.warnings)
+        if unknown_companies:
+            warnings.append(f"已忽略无法识别的企业：{'、'.join(unknown_companies)}")
         for hit in outcome.hits:
             try:
                 self._leads.upsert_search_hit(hit)
@@ -149,17 +189,6 @@ class JobDiscoveryService:
                 for lead in all_leads
                 if lead.published_date is not None and lead.published_date >= cutoff_date
             ]
-        jobs, _job_total = self._local_jobs(
-            query,
-            selected,
-            city,
-            job_type,
-            job_family,
-            days,
-            sort,
-            published_within_days,
-            verification,
-        )
         offset = (page - 1) * page_size
         page_leads = all_leads[offset : offset + page_size]
         page_jobs = jobs[offset : offset + page_size]
@@ -263,8 +292,12 @@ class JobDiscoveryService:
             if published_within_days
             else None
         )
+        # Agent tools join several keywords into one string ("大模型 LLM Agent").
+        # Matching that verbatim matches nothing, so every term is OR-ed.
+        terms = tuple(word for word in (query or "").split() if word)
         job_query = JobQuery(
-            q=query,
+            q=None,
+            q_terms=terms,
             companies=display_companies,
             cities=(city,) if city else (),
             job_types=(job_type,) if job_type else (),

@@ -17,6 +17,9 @@ from app.db.models.job import Company, Job, JobSource
 @dataclass(frozen=True)
 class JobQuery:
     q: str | None = None
+    # Any-of matching for several keywords; ``q`` is a single substring, so
+    # passing "大模型 LLM Agent" there never matches anything.
+    q_terms: tuple[str, ...] = ()
     companies: tuple[str, ...] = ()
     cities: tuple[str, ...] = ()
     job_types: tuple[str, ...] = ()
@@ -52,6 +55,18 @@ class JobRepository:
                     Job.description.ilike(pattern, escape="\\"),
                 )
             )
+        if query.q_terms:
+            term_conditions = []
+            for term in query.q_terms:
+                pattern = f"%{escape_like(term)}%"
+                term_conditions.append(
+                    or_(
+                        Job.title.ilike(pattern, escape="\\"),
+                        Company.name.ilike(pattern, escape="\\"),
+                        Job.description.ilike(pattern, escape="\\"),
+                    )
+                )
+            conditions.append(or_(*term_conditions))
         if query.companies:
             normalized = {normalize_company_name(name) for name in query.companies}
             conditions.append(Company.normalized_name.in_(normalized))
@@ -126,3 +141,10 @@ class JobRepository:
         return self._session.scalar(
             select(Job).where(Job.source_id == source_id, Job.source_job_id == source_job_id)
         )
+
+    def get_by_source_job_id(self, source_job_id: str, *, include_demo: bool) -> Job | None:
+        """Look a job up by the posting number printed on the official site."""
+        stmt = select(Job).where(Job.source_job_id == source_job_id)
+        if not include_demo:
+            stmt = stmt.where(Job.is_demo.is_(False))
+        return self._session.scalar(stmt.limit(1))

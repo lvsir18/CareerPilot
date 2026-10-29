@@ -100,6 +100,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const isAgentWorkspace = pathname === "/agent";
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
@@ -161,7 +162,7 @@ export function AppShell({
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 lg:flex">
+    <div className={cn("bg-slate-50 lg:flex", isAgentWorkspace ? "h-dvh overflow-hidden" : "min-h-screen")}>
       <aside className="fixed inset-y-0 hidden w-64 flex-col border-r border-slate-800 bg-slate-950 lg:flex">
         <div className="flex items-center gap-3 px-5 py-5">
           <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 text-sm font-bold text-white shadow-lg shadow-sky-500/20">
@@ -259,8 +260,8 @@ export function AppShell({
         </div>
       ) : null}
 
-      <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
-        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/85 backdrop-blur">
+      <div className={cn("flex min-w-0 flex-1 flex-col lg:pl-64", isAgentWorkspace && "h-full min-h-0")}>
+        <header className="sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white/85 backdrop-blur">
           <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
             <div className="flex min-w-0 items-center gap-2 text-sm">
               <button
@@ -297,9 +298,19 @@ export function AppShell({
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">{children}</main>
+        {/* The chat needs a bounded flex ancestor for its internal scroll panes.
+            Other pages retain normal document scrolling. */}
+        <main className={cn(
+          "mx-auto w-full max-w-6xl min-h-0 flex-1 px-4 sm:px-6",
+          isAgentWorkspace ? "flex flex-col overflow-hidden py-4" : "py-6 sm:py-8",
+        )}>
+          {children}
+        </main>
 
-        <footer className="mx-auto w-full max-w-6xl px-4 pb-8 text-xs text-slate-400 sm:px-6">
+        <footer className={cn(
+          "mx-auto w-full max-w-6xl shrink-0 px-4 text-xs text-slate-400 sm:px-6",
+          isAgentWorkspace ? "pb-3" : "pb-8",
+        )}>
           CareerPilot 不会自动向招聘网站提交申请；所有岗位都会保留可核验的原始来源。
         </footer>
       </div>

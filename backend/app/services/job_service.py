@@ -32,3 +32,21 @@ class JobService:
                 status_code=404,
             )
         return job
+
+    def find_job(self, identifier: str) -> Job | None:
+        """Resolve a job by internal UUID or by its official posting number.
+
+        LLMs routinely pass the number printed on the official site (e.g. a
+        Tencent ``postId``) instead of our internal UUID, so both identifiers
+        are accepted here rather than crashing on ``UUID()``.
+        """
+        value = (identifier or "").strip()
+        if not value:
+            return None
+        try:
+            job_id = UUID(value)
+        except (TypeError, ValueError):
+            return self._repository.get_by_source_job_id(
+                value, include_demo=self._settings.demo_mode
+            )
+        return self._repository.get(job_id, include_demo=self._settings.demo_mode)

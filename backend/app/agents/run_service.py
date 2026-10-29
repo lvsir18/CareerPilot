@@ -25,6 +25,17 @@ TERMINAL_STATUSES = frozenset({"completed", "partial", "failed", "cancelled", "t
 # States an already-finished run must never be overwritten with.
 _PROTECTED_FROM = frozenset({"queued", "running", "waiting_for_user"})
 
+# A worker killed mid-run leaves the row in ``running`` forever. These bounds
+# decide when that zombie (or an unhonoured cancel) gets reconciled.
+STALE_RUN_TIMEOUT_SECONDS = 900  # > 3 × Celery soft_time_limit (240s)
+CANCEL_GRACE_SECONDS = 60
+
+
+def _seconds_since(value: datetime, now: datetime) -> float:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return (now - value).total_seconds()
+
 
 # Re-exported so worker code has a single exception type to catch.
 AgentRunCancelled = RunCancelled
@@ -138,6 +149,54 @@ class AgentRunService:
         self.append_event(run, "run.started", {"attempt": run.attempt_count})
         self._session.commit()
         return True
+
+    def reconcile_stale_runs(
+        self,
+        *,
+        now: datetime | None = None,
+        run_timeout_seconds: int = STALE_RUN_TIMEOUT_SECONDS,
+        cancel_grace_seconds: int = CANCEL_GRACE_SECONDS,
+    ) -> list[dict[str, Any]]:
+        """Close runs left behind by a dead worker.
+
+        A worker that is restarted or killed mid-run leaves ``status='running'``
+        forever: Celery re-delivers the message (``acks_late``), but ``claim()``
+        only accepts ``queued``. A cancel accepted while no worker was alive has
+        the same fate. Both are reconciled here instead of waiting for the user
+        to give up on a spinner.
+        """
+        moment = now or datetime.now(UTC)
+        runs = self._session.scalars(
+            select(AgentRun).where(AgentRun.status.in_(("queued", "running")))
+        ).all()
+        reconciled: list[dict[str, Any]] = []
+        for run in runs:
+            cancelled_at = run.cancel_requested_at
+            if cancelled_at is not None and (
+                _seconds_since(cancelled_at, moment) >= cancel_grace_seconds
+            ):
+                self.append_event(run, "run.cancelled", {"reason": "no_worker"})
+                self.set_status(run, "cancelled")
+                reconciled.append({"run_id": str(run.id), "status": "cancelled"})
+                continue
+            started_at = run.started_at
+            if (
+                started_at is not None
+                and run_timeout_seconds > 0
+                and _seconds_since(started_at, moment) >= run_timeout_seconds
+            ):
+                summary = "执行进程中断（Worker 重启或崩溃），本轮未产出结果，请重试"
+                self.append_event(
+                    run, "run.failed", {"code": "RUN_INTERRUPTED", "message": summary}
+                )
+                self.set_status(
+                    run,
+                    "failed",
+                    error_code="RUN_INTERRUPTED",
+                    error_summary=summary,
+                )
+                reconciled.append({"run_id": str(run.id), "status": "failed"})
+        return reconciled
 
     # ---------------------------------------------------------------- events
     def append_event(

@@ -27,6 +27,20 @@ def healthcheck() -> dict[str, Any]:
     }
 
 
+@celery_app.task(name="careerpilot.reconcile_agent_runs")
+def reconcile_agent_runs() -> dict[str, Any]:
+    """Close agent runs whose worker died, plus cancels nobody ever honoured.
+
+    Without this a restarted worker leaves the run stuck in ``running``: the
+    Celery message is re-delivered but ``claim()`` only accepts ``queued``.
+    """
+    from app.agents.run_service import AgentRunService
+
+    with session_scope() as session:
+        fixed = AgentRunService(session).reconcile_stale_runs()
+    return {"reconciled": fixed}
+
+
 @celery_app.task(
     bind=True,
     name="careerpilot.sync_job_source",
@@ -246,6 +260,7 @@ def run_agent_run(self, run_id: str) -> dict[str, Any]:
                     user,
                     thread_key,
                     approve,
+                    on_event=emit,
                     cancel_check=cancel_check,
                 )
             else:

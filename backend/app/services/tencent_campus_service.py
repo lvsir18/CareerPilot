@@ -72,9 +72,19 @@ class TencentCampusService:
         jobs: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
         try:
-            # The endpoint ignores projectId, so one wide page is fetched and the
-            # recruiting project is filtered locally instead of paging blindly.
-            positions = connector.search(keyword, project=project, page_size=100)
+            try:
+                # The endpoint ignores projectId, so one wide page is fetched and
+                # the recruiting project is filtered locally instead of paging.
+                positions = connector.search(keyword, project=project, page_size=100)
+            except ConnectorError as exc:
+                # Connector exceptions are not ``AppError``, so letting them
+                # bubble turns an upstream hiccup into an opaque TOOL_FAILED in
+                # the agent run. Surface a readable business error instead.
+                raise AppError(
+                    "TENCENT_CAMPUS_UNAVAILABLE",
+                    f"腾讯校招接口暂不可用：{exc}",
+                    status_code=502,
+                ) from exc
             source = self._source()
             for row in positions[:bounded]:
                 post_id = str(row.get("postId") or "").strip()

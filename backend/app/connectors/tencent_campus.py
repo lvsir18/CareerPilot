@@ -125,8 +125,13 @@ class TencentCampusConnector:
         }
         data = _unwrap(self._client.post_json(SEARCH_URL, payload))
         positions = data.get("positionList")
+        # A zero-result query answers ``{"positionList": null, "count": 0}``
+        # instead of an empty list, so ``null`` means "no match", not "broken
+        # schema" (that used to surface as a TOOL_FAILED agent step).
+        if positions is None:
+            return []
         if not isinstance(positions, list):
-            raise ConnectorParseError("腾讯校招搜索结果缺少 positionList")
+            raise ConnectorParseError("腾讯校招搜索结果 positionList 格式异常")
         rows = [item for item in positions if isinstance(item, dict)]
         # ``projectId`` is accepted but ignored by the endpoint (campus postings
         # come back regardless), so the recruiting project is filtered locally.

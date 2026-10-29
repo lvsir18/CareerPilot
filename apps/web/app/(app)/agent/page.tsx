@@ -91,15 +91,221 @@ function syncThreadUrl(threadId: string | null) {
 }
 
 /** Append an assistant answer only when the message list does not have it yet. */
-function withAnswer(list: AgentMessage[], answer: string | null | undefined): AgentMessage[] {
+function withAnswer(
+  list: AgentMessage[],
+  answer: string | null | undefined,
+  cards?: AgentRunResult["structured"] | null,
+): AgentMessage[] {
   if (!answer) {
     return list;
   }
   const last = list[list.length - 1];
   if (last && last.role === "assistant" && last.content === answer) {
+    // HITL resume replays the same answer; attach cards to the existing bubble.
+    if (cards && !last.cards) {
+      return [...list.slice(0, -1), { ...last, cards }];
+    }
     return list;
   }
-  return [...list, { role: "assistant", content: answer }];
+  return [...list, { role: "assistant", content: answer, cards: cards ?? null }];
+}
+
+/**
+ * Rebuild a conversation from persisted runs: one question bubble and one
+ * answer bubble per turn, with that turn's cards attached to its answer.
+ *
+ * The checkpoint history only stores text, which is why cards used to vanish on
+ * reload and why a single page-level panel always showed the newest turn.
+ */
+export function buildTurnsFromRuns(runs: AgentRun[]): AgentMessage[] {
+  const ordered = [...runs].sort((left, right) =>
+    left.created_at.localeCompare(right.created_at),
+  );
+  const turns: AgentMessage[] = [];
+  for (const run of ordered) {
+    const question = (run.input_message ?? "").trim();
+    if (question) {
+      turns.push({ role: "user", content: question });
+    }
+    const answer = run.result?.final_answer;
+    if (!answer) {
+      continue;
+    }
+    const cards = run.result?.structured ?? null;
+    const last = turns[turns.length - 1];
+    if (!question && last && last.role === "assistant" && last.content === answer) {
+      // A resume run repeats the previous answer text; merge its cards instead
+      // of rendering the same answer twice.
+      if (cards) {
+        turns[turns.length - 1] = { ...last, cards };
+      }
+      continue;
+    }
+    turns.push({ role: "assistant", content: answer, cards });
+  }
+  return turns;
+}
+
+function AgentResultCards({
+  structured,
+}: {
+  structured: NonNullable<AgentRunResult["structured"]>;
+}) {
+  const hasCards = Boolean(
+    structured.jobs?.length ||
+      structured.matches?.length ||
+      structured.extra_matches?.length ||
+      structured.applications?.length,
+  );
+  if (!hasCards) {
+    return null;
+  }
+  // Eligible matches first and the rest explicitly labelled: the same styling
+  // for a 运营 job the user cannot apply to read as "recommended".
+  const matchCards = structured.matches ?? [];
+  const orderedMatches = [
+    ...matchCards.filter((item) => item.match?.eligibility_status !== "ineligible"),
+    ...matchCards.filter((item) => item.match?.eligibility_status === "ineligible"),
+  ];
+
+  return (
+    <div className="space-y-2">
+      {structured.jobs?.slice(0, 6).map((job, index) => (
+        <div
+          key={`job-${job.id ?? index}`}
+          className="min-w-0 rounded-lg border border-slate-200 bg-white p-3"
+        >
+          <p className="break-words text-sm font-medium text-slate-800">
+            {job.company ?? "未知企业"} · {job.title ?? "未知岗位"}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            {job.city ?? "城市未知"} · {formatJobType(job.job_type)}
+            {job.verification_status
+              ? ` · ${formatVerificationStatus(job.verification_status)}`
+              : ""}
+          </p>
+          <div className="mt-1 flex flex-wrap gap-3 text-xs">
+            {job.source_url || job.official_url ? (
+              <a
+                href={job.source_url ?? job.official_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-sky-700 hover:underline"
+              >
+                官网
+              </a>
+            ) : null}
+            {job.id ? (
+              <Link href={`/jobs/${job.id}`} className="text-slate-600 hover:underline">
+                详情
+              </Link>
+            ) : null}
+            <Link
+              href={`/discover?q=${encodeURIComponent(job.title ?? "")}`}
+              className="text-slate-600 hover:underline"
+            >
+              在招聘中心查看
+            </Link>
+          </div>
+        </div>
+      ))}
+
+      {orderedMatches.slice(0, 6).map((item, index) => (
+        <div
+          key={`match-${item.job?.id ?? index}`}
+          className={
+            item.match?.eligibility_status === "ineligible"
+              ? "min-w-0 rounded-lg border border-rose-200 bg-rose-50/40 p-3"
+              : "min-w-0 rounded-lg border border-slate-200 bg-white p-3"
+          }
+        >
+          <p className="break-words text-sm font-medium text-slate-800">
+            {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
+            {item.match?.eligibility_status === "ineligible" ? (
+              <span className="ml-2 rounded-full bg-rose-100 px-1.5 py-0.5 align-middle text-[10px] font-normal text-rose-700">
+                资格不符 · 仅供参考
+              </span>
+            ) : null}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            匹配{" "}
+            {item.match?.match_score != null ? `${item.match.match_score}/100` : "信息不足"} ·{" "}
+            {formatEligibility(item.match?.eligibility_status)}
+          </p>
+          {item.match?.matched_skills?.length ? (
+            <p className="mt-1 break-words text-xs text-emerald-700">
+              命中：{item.match.matched_skills.join("、")}
+            </p>
+          ) : null}
+          {item.match?.unverified_skills?.length ? (
+            <p className="mt-0.5 break-words text-xs text-slate-500">
+              未体现：{item.match.unverified_skills.join("、")}
+            </p>
+          ) : null}
+          <div className="mt-1 flex flex-wrap gap-3 text-xs">
+            {item.job?.id ? (
+              <Link href={`/jobs/${item.job.id}`} className="text-sky-700 hover:underline">
+                详情
+              </Link>
+            ) : null}
+            {item.job?.source_url ? (
+              <a
+                href={item.job.source_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-slate-600 hover:underline"
+              >
+                官网
+              </a>
+            ) : null}
+          </div>
+        </div>
+      ))}
+
+      {structured.extra_matches?.length ? (
+        <details className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <summary className="cursor-pointer text-xs text-slate-600">
+            另有 {structured.extra_matches.length} 个候选未列入本轮条件
+          </summary>
+          <ul className="mt-2 space-y-1">
+            {structured.extra_matches.slice(0, 10).map((item, index) => (
+              <li
+                key={`extra-${item.job?.id ?? index}`}
+                className="break-words text-xs text-slate-500"
+              >
+                {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
+                <span className="ml-1 text-slate-400">
+                  （{item.selection_reason ?? "未列入本轮条件"}）
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      {structured.applications?.slice(0, 6).map((app, index) => (
+        <div
+          key={`app-${app.id ?? index}`}
+          className="min-w-0 rounded-lg border border-slate-200 bg-white p-3"
+        >
+          <p className="break-words text-sm font-medium text-slate-800">
+            {app.company ?? "未知企业"} · {app.title ?? "未知岗位"}
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            状态：{app.status ? formatApplicationStatus(app.status) : "未知"}
+          </p>
+          {app.id ? (
+            <Link
+              href={`/applications/${app.id}`}
+              className="mt-1 inline-block text-xs text-sky-700 hover:underline"
+            >
+              查看申请详情
+            </Link>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function AgentPageInner() {
@@ -116,7 +322,6 @@ function AgentPageInner() {
   const [input, setInput] = useState(handoffQuery);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [structured, setStructured] = useState<AgentRunResult["structured"]>(null);
   // Async execution state: the run is created immediately, then followed via SSE.
   const [run, setRun] = useState<AgentRun | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
@@ -130,6 +335,7 @@ function AgentPageInner() {
   const loadToken = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
+  const stepsListRef = useRef<HTMLUListElement | null>(null);
   const creatingThread = useRef<Promise<AgentThread | null> | null>(null);
   const appliedHandoff = useRef(handoffQuery);
   const openedThread = useRef<string | null>(null);
@@ -157,8 +363,9 @@ function AgentPageInner() {
       setRun((prev) => (prev ? { ...prev, status } : prev));
       setWaitingApproval(status === "waiting_for_user");
       if (result) {
-        setMessages((prev) => withAnswer(prev, result.final_answer));
-        setStructured(result.structured ?? null);
+        // Cards ride on the answer bubble so they can never drift below a newer
+        // question or be overwritten by the next turn.
+        setMessages((prev) => withAnswer(prev, result.final_answer, result.structured ?? null));
       }
       void refreshThreads();
     },
@@ -251,17 +458,49 @@ function AgentPageInner() {
     [detachStream, finishRun],
   );
 
-  /** Re-attach to the newest run of a thread after refresh/thread switch. */
-  const restoreRun = useCallback(
-    async (threadId: string, token: number) => {
-      const runs = await listAgentThreadRuns(threadId, 1);
-      if (loadToken.current !== token || !runs.ok) {
+  const openThread = useCallback(
+    async (thread: AgentThread) => {
+      openedThread.current = thread.id;
+      const token = loadToken.current + 1;
+      loadToken.current = token;
+      detachStream();
+      setCurrent(thread);
+      setBusy(false);
+      setError(null);
+      setRun(null);
+      setRunStatus(null);
+      setWaitingApproval(false);
+      setSteps([]);
+      setMessages([]);
+      setSidebarOpen(false);
+      setLoadingMessages(true);
+      syncThreadUrl(thread.id);
+      // One turn per run: the question comes from the run payload, the answer and
+      // its cards from the run result. Checkpoint text is only a fallback for
+      // threads that predate run records.
+      const runs = await listAgentThreadRuns(thread.id, 50);
+      if (loadToken.current !== token) {
         return;
       }
-      const latest = runs.data[0];
-      if (!latest) {
+      if (runs.ok && runs.data.length > 0) {
+        setMessages(buildTurnsFromRuns(runs.data));
+      } else {
+        const history = await listAgentMessages(thread.id);
+        if (loadToken.current !== token) {
+          return;
+        }
+        setMessages(history.ok ? history.data : []);
+        if (!history.ok) {
+          setError(history.error.message);
+        }
+      }
+      setLoadingMessages(false);
+      if (!runs.ok || runs.data.length === 0) {
         return;
       }
+      const latest = runs.data.reduce((newest, item) =>
+        item.created_at > newest.created_at ? item : newest,
+      );
       setRun(latest);
       setRunStatus(latest.status);
       if (LIVE_STATUSES.includes(latest.status)) {
@@ -272,44 +511,8 @@ function AgentPageInner() {
       if (latest.status === "waiting_for_user") {
         setWaitingApproval(true);
       }
-      if (latest.result) {
-        setMessages((prev) => withAnswer(prev, latest.result?.final_answer));
-        setStructured(latest.result.structured ?? null);
-      }
     },
-    [followRun],
-  );
-
-  const openThread = useCallback(
-    async (thread: AgentThread) => {
-      openedThread.current = thread.id;
-      const token = loadToken.current + 1;
-      loadToken.current = token;
-      detachStream();
-      setCurrent(thread);
-      setBusy(false);
-      setError(null);
-      setStructured(null);
-      setRun(null);
-      setRunStatus(null);
-      setWaitingApproval(false);
-      setSteps([]);
-      setMessages([]);
-      setSidebarOpen(false);
-      setLoadingMessages(true);
-      syncThreadUrl(thread.id);
-      const result = await listAgentMessages(thread.id);
-      if (loadToken.current !== token) {
-        return;
-      }
-      setMessages(result.ok ? result.data : []);
-      if (!result.ok) {
-        setError(result.error.message);
-      }
-      setLoadingMessages(false);
-      await restoreRun(thread.id, token);
-    },
-    [detachStream, restoreRun],
+    [detachStream, followRun],
   );
 
   // URL changes within this page must not detach its current subscription.
@@ -320,6 +523,14 @@ function AgentPageInner() {
       detachStream();
     };
   }, [detachStream]);
+
+  // Keep the newest step visible without letting the panel grow.
+  useEffect(() => {
+    const element = stepsListRef.current;
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [steps.length]);
 
   useEffect(() => {
     let active = true;
@@ -382,7 +593,6 @@ function AgentPageInner() {
       setCurrent(result.data);
       setMessages([]);
       setLoadingMessages(false);
-      setStructured(null);
       setRun(null);
       setRunStatus(null);
       // Switching threads detaches the live stream: release the composer instead
@@ -452,7 +662,6 @@ function AgentPageInner() {
       setLoadingMessages(false);
       setBusy(false);
       setSteps([]);
-      setStructured(null);
       setRun(null);
       setRunStatus(null);
       setWaitingApproval(false);
@@ -587,35 +796,19 @@ function AgentPageInner() {
     );
   }
 
-  const hasCards = Boolean(
-    structured &&
-      (structured.jobs?.length ||
-        structured.matches?.length ||
-        structured.extra_matches?.length ||
-        structured.applications?.length),
-  );
-
-  // Eligible matches first and the rest explicitly labelled: the same styling
-  // for a 运营 job the user cannot apply to read as "recommended".
-  const matchCards = structured?.matches ?? [];
-  const orderedMatches = [
-    ...matchCards.filter((item) => item.match?.eligibility_status !== "ineligible"),
-    ...matchCards.filter((item) => item.match?.eligibility_status === "ineligible"),
-  ];
-
   return (
-    <div className="relative flex h-[calc(100vh-6rem)] min-w-0 gap-4 overflow-hidden">
+    <div className="relative isolate flex h-full min-h-0 min-w-0 gap-4 overflow-hidden">
       {sidebarOpen ? (
         <button
           type="button"
           aria-label="关闭会话列表"
           onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 z-10 bg-slate-900/20 md:hidden"
+          className="absolute inset-0 z-10 bg-slate-900/20 md:hidden"
         />
       ) : null}
       <aside
         className={cn(
-          "z-20 w-72 shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:flex md:w-60",
+          "z-20 min-h-0 w-72 shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:static md:flex md:w-60",
           sidebarOpen ? "absolute inset-y-0 left-0 flex" : "hidden",
         )}
       >
@@ -637,7 +830,7 @@ function AgentPageInner() {
             <X className="size-4" aria-hidden />
           </button>
         </div>
-        <div className="mt-3 flex-1 space-y-1 overflow-y-auto">
+        <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain">
           {threads.length === 0 ? (
             <p className="px-2 py-3 text-[11px] text-slate-400">还没有对话记录</p>
           ) : (
@@ -690,7 +883,7 @@ function AgentPageInner() {
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex min-w-0 items-center gap-2 border-b border-slate-200 px-4 py-3">
           <button
             type="button"
@@ -740,7 +933,7 @@ function AgentPageInner() {
           </Link>
         </div>
 
-        <div ref={scrollRef} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
+        <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-4">
           <div className="mx-auto w-full max-w-2xl min-w-0 space-y-3">
             {loadingMessages ? (
               <p className="text-sm text-slate-500">正在加载会话…</p>
@@ -768,151 +961,14 @@ function AgentPageInner() {
               messages
                 .filter((message) => message.role === "user" || message.role === "assistant")
                 .map((message, index) => (
-                  <AgentMessageBubble key={index} message={message} />
+                  <div key={index} className="space-y-2">
+                    <AgentMessageBubble message={message} />
+                    {message.cards ? <AgentResultCards structured={message.cards} /> : null}
+                  </div>
                 ))
             )}
             {error ? <p className="break-words text-sm text-rose-700">{error}</p> : null}
 
-            {hasCards && structured ? (
-              <div className="space-y-2">
-                {structured.jobs?.slice(0, 6).map((job, index) => (
-                  <div
-                    key={`job-${job.id ?? index}`}
-                    className="min-w-0 rounded-lg border border-slate-200 bg-white p-3"
-                  >
-                    <p className="break-words text-sm font-medium text-slate-800">
-                      {job.company ?? "未知企业"} · {job.title ?? "未知岗位"}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      {job.city ?? "城市未知"} · {formatJobType(job.job_type)}
-                      {job.verification_status
-                        ? ` · ${formatVerificationStatus(job.verification_status)}`
-                        : ""}
-                    </p>
-                    <div className="mt-1 flex flex-wrap gap-3 text-xs">
-                      {job.source_url || job.official_url ? (
-                        <a
-                          href={job.source_url ?? job.official_url}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="text-sky-700 hover:underline"
-                        >
-                          官网
-                        </a>
-                      ) : null}
-                      {job.id ? (
-                        <Link href={`/jobs/${job.id}`} className="text-slate-600 hover:underline">
-                          详情
-                        </Link>
-                      ) : null}
-                      <Link
-                        href={`/discover?q=${encodeURIComponent(job.title ?? "")}`}
-                        className="text-slate-600 hover:underline"
-                      >
-                        在招聘中心查看
-                      </Link>
-                    </div>
-                  </div>
-                ))}
-
-                {orderedMatches.slice(0, 6).map((item, index) => (
-                  <div
-                    key={`match-${item.job?.id ?? index}`}
-                    className={
-                      item.match?.eligibility_status === "ineligible"
-                        ? "min-w-0 rounded-lg border border-rose-200 bg-rose-50/40 p-3"
-                        : "min-w-0 rounded-lg border border-slate-200 bg-white p-3"
-                    }
-                  >
-                    <p className="break-words text-sm font-medium text-slate-800">
-                      {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
-                      {item.match?.eligibility_status === "ineligible" ? (
-                        <span className="ml-2 rounded-full bg-rose-100 px-1.5 py-0.5 align-middle text-[10px] font-normal text-rose-700">
-                          资格不符 · 仅供参考
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      匹配{" "}
-                      {item.match?.match_score != null
-                        ? `${item.match.match_score}/100`
-                        : "信息不足"}{" "}
-                      · {formatEligibility(item.match?.eligibility_status)}
-                    </p>
-                    {item.match?.matched_skills?.length ? (
-                      <p className="mt-1 break-words text-xs text-emerald-700">
-                        命中：{item.match.matched_skills.join("、")}
-                      </p>
-                    ) : null}
-                    {item.match?.unverified_skills?.length ? (
-                      <p className="mt-0.5 break-words text-xs text-slate-500">
-                        未体现：{item.match.unverified_skills.join("、")}
-                      </p>
-                    ) : null}
-                    <div className="mt-1 flex flex-wrap gap-3 text-xs">
-                      {item.job?.id ? (
-                        <Link href={`/jobs/${item.job.id}`} className="text-sky-700 hover:underline">
-                          详情
-                        </Link>
-                      ) : null}
-                      {item.job?.source_url ? (
-                        <a
-                          href={item.job.source_url}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="text-slate-600 hover:underline"
-                        >
-                          官网
-                        </a>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-
-                {structured.extra_matches?.length ? (
-                  <details className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <summary className="cursor-pointer text-xs text-slate-600">
-                      另有 {structured.extra_matches.length} 个候选未列入本轮条件
-                    </summary>
-                    <ul className="mt-2 space-y-1">
-                      {structured.extra_matches.slice(0, 10).map((item, index) => (
-                        <li
-                          key={`extra-${item.job?.id ?? index}`}
-                          className="break-words text-xs text-slate-500"
-                        >
-                          {item.job?.company ?? "未知企业"} · {item.job?.title ?? "未知岗位"}
-                          <span className="ml-1 text-slate-400">
-                            （{item.selection_reason ?? "未列入本轮条件"}）
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                ) : null}
-
-                {structured.applications?.slice(0, 6).map((app, index) => (
-                  <div
-                    key={`app-${app.id ?? index}`}
-                    className="min-w-0 rounded-lg border border-slate-200 bg-white p-3"
-                  >
-                    <p className="break-words text-sm font-medium text-slate-800">
-                      {app.company ?? "未知企业"} · {app.title ?? "未知岗位"}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      状态：{app.status ? formatApplicationStatus(app.status) : "未知"}
-                    </p>
-                    {app.id ? (
-                      <Link
-                        href={`/applications/${app.id}`}
-                        className="mt-1 inline-block text-xs text-sky-700 hover:underline"
-                      >
-                        查看申请详情
-                      </Link>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
         </div>
 
@@ -938,8 +994,12 @@ function AgentPageInner() {
                 ) : null}
               </div>
               {steps.length ? (
-                <ul className="mt-1.5 space-y-0.5">
-                  {steps.slice(-6).map((step) => (
+                <ul
+                  ref={stepsListRef}
+                  aria-label="任务执行步骤"
+                  className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto pr-1"
+                >
+                  {steps.map((step) => (
                     <li key={step.sequence} className="text-[11px] text-slate-500">
                       #{step.sequence} {formatAgentEventType(step.event_type)}
                     </li>
