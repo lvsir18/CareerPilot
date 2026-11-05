@@ -29,6 +29,9 @@ _PROTECTED_FROM = frozenset({"queued", "running", "waiting_for_user"})
 # decide when that zombie (or an unhonoured cancel) gets reconciled.
 STALE_RUN_TIMEOUT_SECONDS = 900  # > 3 × Celery soft_time_limit (240s)
 CANCEL_GRACE_SECONDS = 60
+# One retry is what a worker restart needs; more than that usually means the run
+# itself is broken and should surface as failed instead of looping.
+MAX_RUN_ATTEMPTS = 3
 
 
 def _seconds_since(value: datetime, now: datetime) -> float:
@@ -140,13 +143,33 @@ class AgentRunService:
         return run is not None and run.cancel_requested_at is not None
 
     def claim(self, run: AgentRun) -> bool:
-        """Atomically move queued -> running; False if another worker won."""
-        if run.status != "queued":
+        """Atomically move queued -> running, or take over a dead worker's run.
+
+        ``acks_late`` re-delivers the Celery message of a killed worker, but the
+        run row is still ``running``. Refusing to claim it dropped the user's
+        question on the floor (that is exactly what happened to the
+        "北京/上海/杭州" turn). A re-delivery can only happen after the owning
+        worker died, so taking it over is safe; ``attempt_count`` bounds loops.
+        """
+        now = datetime.now(UTC)
+        if run.status == "queued":
+            reason = "queued"
+        elif (
+            run.status == "running"
+            and run.cancel_requested_at is None
+            and run.attempt_count < MAX_RUN_ATTEMPTS
+        ):
+            reason = "takeover"
+        else:
             return False
         run.status = "running"
-        run.started_at = datetime.now(UTC)
+        run.started_at = now
         run.attempt_count += 1
-        self.append_event(run, "run.started", {"attempt": run.attempt_count})
+        self.append_event(
+            run,
+            "run.started" if reason == "queued" else "run.resumed",
+            {"attempt": run.attempt_count, "reason": reason},
+        )
         self._session.commit()
         return True
 
@@ -185,7 +208,20 @@ class AgentRunService:
                 and run_timeout_seconds > 0
                 and _seconds_since(started_at, moment) >= run_timeout_seconds
             ):
-                summary = "执行进程中断（Worker 重启或崩溃），本轮未产出结果，请重试"
+                if run.attempt_count < MAX_RUN_ATTEMPTS:
+                    # Re-queue instead of failing: restarting the worker must not
+                    # throw away the user's question. The caller re-dispatches.
+                    run.status = "queued"
+                    run.started_at = None
+                    self.append_event(
+                        run,
+                        "run.resumed",
+                        {"reason": "worker_restart", "attempt": run.attempt_count},
+                    )
+                    self._session.commit()
+                    reconciled.append({"run_id": str(run.id), "status": "requeued"})
+                    continue
+                summary = "执行进程中断（Worker 重启或崩溃），已达到最大重试次数"
                 self.append_event(
                     run, "run.failed", {"code": "RUN_INTERRUPTED", "message": summary}
                 )

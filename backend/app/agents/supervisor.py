@@ -6,7 +6,7 @@ import json
 from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -20,7 +20,15 @@ _INTENT_SYSTEM = """你是求职任务理解器。解析用户输入为结构化
 - chitchat 用于打招呼、询问你的能力、闲聊或与求职数据无关的问题；这类输入不需要调用任何求职工具。
 - 提取关键词、公司、城市、求职类型、是否排除已申请、TopK。
 - required_agents 从 {job_search, job_match, progress, profile} 中按任务需要选择。
-- 不要编造约束；信息缺失时使用空列表或默认值。"""
+- 不要编造约束；信息缺失时使用空列表或默认值。
+- 输入是多轮对话：question 可能省略上文条件（「那杭州呢」「第一个岗位」「刚才那几个」）。
+  先读 previous.question / previous.answer / previous.constraints 再补全：
+  用户只换了城市就只改 cities，keywords、job_types（例如「实习」）、companies 保持不变；
+  用户说「第一个岗位」「那个 JD」时，沿用上一轮的公司与方向，不要切换城市或岗位类型。
+- 纯回指且不需要新的数据检索（「刚才你找到几个」「上一轮说了什么」）时，用 chitchat。
+- user_preferences 是该用户已确认画像里的长期偏好
+  （cities / job_types / keywords / excluded_keywords）。
+  本轮和上一轮都没有指定这个维度时，采用偏好；用户本轮明确给了别的值或说「不限」时以用户为准。"""
 
 # Deterministic routing fallback: required_agents is derived from intent when
 # the model leaves it empty, keeping agent selection explainable.
@@ -81,6 +89,8 @@ _AGGREGATE_SYSTEM = """你是求职 Agent 结果汇总器。第一原则：回�
 - 不要自行添加时效或免责声明，系统会在需要时统一追加。
 - 只有确实执行了检索且结果为空时，才用一到两句话说明，并给出下一步建议。
 - 只能推荐 payload.matches 里的岗位，不得列出其中的职位以外的岗位。
+- 用户限定了求职类型（如「实习」）时，不得把校招/社招岗位列入推荐列表；
+  确有重叠可在末尾用一句话说明「另有 N 个校招岗位未列入」。
 - matches 里 source=official 或 verification_status=verified 的岗位代表已读到官方 JD，可直接推荐；
   verification_status=search_snippet_only 的只能作为「仅摘要线索」列出，并提示需到官网核实。
 - matches 为空时明确说明「没有符合条件的岗位」，不要改写成「最接近的岗位」并逐条推荐；
@@ -101,23 +111,165 @@ _ANSWER_FACT_TOOLS = frozenset(
 _CHAT_SYSTEM = """你是 CareerPilot 求职助手。用简洁自然的中文直接回答。
 - 你能做：岗位检索、岗位匹配、申请进度查询、候选人画像查询，以及把结果整理成可执行的求职建议。
 - 不要编造岗位、分数、申请状态或用户画像中没有的信息。
-- 不要提及内部工具、模型或报错细节。"""
+- 不要提及内部工具、模型或报错细节。
+- 输入可能是 {"question": ..., "previous_results": {...}}。
+  previous_results 是上一轮检索的真实统计：jobs 岗位数、verified_jobs 已核验数、
+  leads 仅摘要数、cities、keywords、job_types、answer。
+  用户问「刚才找到几个」「上一轮是哪个城市」时直接引用这些数字与字段，不要回答「没有保留记录」。
+  只有 previous_results 为空时，才说明上一轮没有检索结果。"""
 
 
-def _understand(model: BaseChatModel):
+_CARRY_OVER_INTENTS = frozenset({"job_search", "job_match", "combined"})
+_CARRY_OVER_FIELDS = ("cities", "keywords", "companies", "job_types", "exclude_applied")
+
+# Long conversations keep appending to ``messages`` forever (DeepSeek Harness
+# solves the same problem with automatic compaction). Only the tail matters for
+# follow-ups, and ``last_scope`` already carries the durable search context, so
+# older turns can be dropped instead of growing the checkpoint without bound.
+_KEEP_RECENT_MESSAGES = 10
+_TRIM_THRESHOLD = 12
+
+
+def _trim_messages(messages: list[Any]) -> list[Any]:
+    """Drop the oldest turns once a conversation gets long.
+
+    ``last_scope`` keeps the search context across the cut, and follow-ups only
+    look at the last two messages, so this loses history without losing scope.
+    """
+    if len(messages) <= _TRIM_THRESHOLD:
+        return []
+    removed = messages[:-_KEEP_RECENT_MESSAGES]
+    return [RemoveMessage(id=message.id) for message in removed if getattr(message, "id", None)]
+
+
+def _previous_question(messages: list[Any]) -> str:
+    """The question before the current one, used to resolve follow-ups."""
+    humans = [message for message in messages if getattr(message, "type", None) == "human"]
+    if len(humans) < 2:
+        return ""
+    content = humans[-2].content
+    return content if isinstance(content, str) else str(content)
+
+
+def _carry_over(intent: Intent, previous: dict[str, Any], previous_intent: str | None) -> None:
+    """Follow-ups restate one dimension; the rest of the scope is kept.
+
+    "那杭州呢" only mentions the city, so without this the search silently drops
+    "实习" and "大模型" and starts returning 校招 postings. "把第一个岗位的 JD
+    发我" mentions nothing at all, so it needs the previous city too. The model
+    wins whenever it does provide a value; this is only a fill-in.
+    """
+    if not previous:
+        return
+    if intent.intent not in _CARRY_OVER_INTENTS or previous_intent not in _CARRY_OVER_INTENTS:
+        return
+    for field in _CARRY_OVER_FIELDS:
+        if getattr(intent, field):
+            continue
+        value = previous.get(field)
+        if value:
+            setattr(intent, field, value)
+
+
+def _preferences(ctx: RuntimeContext | None) -> dict[str, Any]:
+    """Confirmed profile preferences act as long-term memory for this user.
+
+    LangGraph's short-term memory (checkpointer) only survives inside one
+    thread; a preference like "只要实习 / 优先成都" has to come from the durable
+    profile, otherwise every new conversation starts from zero.
+    """
+    if ctx is None:
+        return {}
+    try:
+        profile = ProfileService(ctx.session).get(ctx.user)
+    except Exception:  # pragma: no cover - a broken profile must not block intent
+        return {}
+    if not profile.verified_by_user:
+        return {}
+    prefs = profile.preferences
+    return {
+        "cities": list(prefs.cities),
+        "job_types": list(prefs.job_types),
+        "keywords": list(prefs.keywords),
+        "excluded_keywords": list(prefs.excluded_keywords),
+        "target_companies": list(prefs.target_companies),
+    }
+
+
+def _understand(model: BaseChatModel, ctx: RuntimeContext | None = None):
     bound = model.bind_tools([convert_to_openai_tool(Intent)])
 
     def node(state: CareerAgentState) -> dict[str, Any]:
-        last = state["messages"][-1]
+        messages = state.get("messages") or []
+        last = messages[-1]
         text = last.content if hasattr(last, "content") else str(last)
-        message = bound.invoke([SystemMessage(_INTENT_SYSTEM), HumanMessage(content=text)])
+        previous_constraints = dict(state.get("constraints") or {})
+        previous_intent = state.get("intent")
+        previous_answer = state.get("final_answer") or ""
+        previous_question = _previous_question(messages)
+        last_scope = dict(state.get("last_scope") or {})
+        # A chit-chat or progress turn carries no search scope, so a follow-up
+        # like "把第一个岗位的 JD 发我" must fall back to the last turn that
+        # actually searched instead of losing the city entirely.
+        if previous_intent in _CARRY_OVER_INTENTS:
+            scope, scope_intent = previous_constraints, previous_intent
+        else:
+            scope, scope_intent = last_scope, last_scope.get("intent")
+
+        preferences = _preferences(ctx)
+
+        # The intent model used to see only the new sentence, so "那杭州呢" lost
+        # the job type/keywords and "第一个岗位" lost the city entirely.
+        context = {
+            "question": text,
+            "user_preferences": preferences,
+            "previous": {
+                "question": previous_question,
+                "answer": previous_answer[:600],
+                "constraints": {
+                    key: previous_constraints.get(key)
+                    for key in (
+                        "intent",
+                        "keywords",
+                        "companies",
+                        "cities",
+                        "job_types",
+                        "exclude_applied",
+                    )
+                },
+                "last_search_scope": last_scope,
+            },
+        }
+        message = bound.invoke(
+            [
+                SystemMessage(_INTENT_SYSTEM),
+                HumanMessage(content=json.dumps(context, ensure_ascii=False)),
+            ]
+        )
         if message.tool_calls:
             intent = Intent.model_validate(message.tool_calls[0]["args"])
         else:
             intent = Intent(intent="job_search")
+        _carry_over(intent, scope, scope_intent)
         # Routing is deterministic: derived from intent, never from free text.
         intent.required_agents = list(_REQUIRED_AGENTS.get(intent.intent, ["job_search"]))
+        next_scope = last_scope
+        if intent.intent in _CARRY_OVER_INTENTS:
+            next_scope = {
+                "intent": intent.intent,
+                "keywords": intent.keywords,
+                "companies": intent.companies,
+                "cities": intent.cities,
+                "job_types": intent.job_types,
+                "exclude_applied": intent.exclude_applied,
+            }
         return {
+            "previous_intent": previous_intent or "",
+            "previous_question": previous_question,
+            "previous_answer": previous_answer,
+            "previous_constraints": previous_constraints,
+            "last_scope": next_scope,
+            "messages": _trim_messages(messages),
             "intent": intent.intent,
             "constraints": intent.model_dump(),
             "plan": [
@@ -272,7 +424,18 @@ def _chat(model: BaseChatModel):
     def node(state: CareerAgentState) -> dict[str, Any]:
         last = state["messages"][-1]
         text = last.content if hasattr(last, "content") else str(last)
-        reply = model.invoke([SystemMessage(_CHAT_SYSTEM), HumanMessage(content=str(text))])
+        previous = (state.get("last_scope") or {}).get("result_summary")
+        if previous:
+            # "刚才你找到几个" must be answered from the last search summary:
+            # tool_results are cleared every turn, so the chat model otherwise
+            # honestly (and uselessly) says it keeps no records.
+            content = json.dumps(
+                {"question": str(text), "previous_results": previous},
+                ensure_ascii=False,
+            )
+        else:
+            content = str(text)
+        reply = model.invoke([SystemMessage(_CHAT_SYSTEM), HumanMessage(content=content)])
         return {
             "final_answer": reply.content if hasattr(reply, "content") else str(reply),
             "status": "completed",
@@ -316,11 +479,33 @@ def _answer_facts(tool_results: list[dict[str, Any]] | None) -> list[dict[str, A
     return facts
 
 
+_JOB_TYPE_ALIASES = {
+    "实习": "internship",
+    "校招": "campus",
+    "秋招": "campus",
+    "春招": "campus",
+    "社招": "experienced",
+    "全职": "experienced",
+}
+
+
+def _wanted_job_types(constraints: dict[str, Any]) -> set[str]:
+    """Normalise the user's 求职类型 ("实习") into the stored enum."""
+    wanted: set[str] = set()
+    for value in constraints.get("job_types") or []:
+        text = str(value).strip().lower()
+        if not text:
+            continue
+        wanted.add(_JOB_TYPE_ALIASES.get(text, text))
+    return wanted
+
+
 def _match_mismatch(
     entry: dict[str, Any],
     companies: list[str],
     cities: list[str],
     keywords: list[str],
+    wanted_types: set[str] | None = None,
 ) -> str | None:
     """Why a match does not belong to the current ask (None means it does).
 
@@ -346,6 +531,9 @@ def _match_mismatch(
         return "不在本轮限定的城市范围"
     if keywords and not any(word and word in haystack for word in keywords):
         return "不在本轮限定的岗位方向"
+    job_type = str(job.get("job_type") or "").strip().lower()
+    if wanted_types and job_type and job_type not in wanted_types:
+        return "不在本轮限定的求职类型"
     return None
 
 
@@ -375,7 +563,10 @@ def _search_entry(
 
 
 def _search_scope_mismatch(
-    entry: dict[str, Any], companies: list[str], cities: list[str]
+    entry: dict[str, Any],
+    companies: list[str],
+    cities: list[str],
+    wanted_types: set[str] | None = None,
 ) -> str | None:
     """Search hits are already keyword-filtered upstream; only scope is checked.
 
@@ -388,6 +579,11 @@ def _search_scope_mismatch(
         return "不在本轮限定的企业范围"
     if cities and city and not any(name and name in city for name in cities):
         return "不在本轮限定的城市范围"
+    job_type = str(entry.get("job_type") or "").strip().lower()
+    if wanted_types and job_type and job_type not in wanted_types:
+        # "实习" asks must not surface 校招 postings, which is what made a
+        # 杭州实习 answer list 校招正式岗.
+        return "不在本轮限定的求职类型"
     return None
 
 
@@ -403,6 +599,7 @@ def _match_summary(
     """
     companies = [str(item) for item in (constraints or {}).get("companies") or [] if item]
     cities = [str(item) for item in (constraints or {}).get("cities") or [] if item]
+    wanted_types = _wanted_job_types(constraints or {})
     included: list[dict[str, Any]] = []
     excluded = 0
     for item in tool_results:
@@ -436,7 +633,9 @@ def _match_summary(
             else:
                 continue
             included.extend(
-                entry for entry in postings if not _search_scope_mismatch(entry, companies, cities)
+                entry
+                for entry in postings
+                if not _search_scope_mismatch(entry, companies, cities, wanted_types)
             )
             continue
         for entry in entries:
@@ -479,7 +678,8 @@ def _split_matches(
     companies = [str(item) for item in constraints.get("companies") or [] if item]
     cities = [str(item) for item in constraints.get("cities") or [] if item]
     keywords = [str(item) for item in constraints.get("keywords") or [] if item]
-    if not (companies or cities or keywords):
+    wanted_types = _wanted_job_types(constraints)
+    if not (companies or cities or keywords or wanted_types):
         return tool_results
 
     output: list[dict[str, Any]] = []
@@ -496,7 +696,7 @@ def _split_matches(
             if not isinstance(data.get("job"), dict):
                 output.append(item)
                 continue
-            reason = _match_mismatch(data, companies, cities, keywords)
+            reason = _match_mismatch(data, companies, cities, keywords, wanted_types)
             if reason:
                 parked.append({**data, "selection_reason": reason})
             else:
@@ -512,7 +712,10 @@ def _split_matches(
                         job
                         for job in data.get("jobs") or []
                         if not _search_scope_mismatch(
-                            _search_entry(job, source="search"), companies, cities
+                            _search_entry(job, source="search"),
+                            companies,
+                            cities,
+                            wanted_types,
                         )
                     ],
                     "leads": [
@@ -524,6 +727,7 @@ def _split_matches(
                             ),
                             companies,
                             cities,
+                            wanted_types,
                         )
                     ],
                 }
@@ -541,6 +745,7 @@ def _split_matches(
                             ),
                             companies,
                             cities,
+                            wanted_types,
                         )
                     ]
                 }
@@ -555,7 +760,7 @@ def _split_matches(
             if not isinstance(entry, dict):
                 keep.append(entry)
                 continue
-            reason = _match_mismatch(entry, companies, cities, keywords)
+            reason = _match_mismatch(entry, companies, cities, keywords, wanted_types)
             if reason:
                 extra.append({**entry, "selection_reason": reason})
             else:
@@ -566,6 +771,40 @@ def _split_matches(
     if parked:
         output.append({"tool": "recommend_jobs", "data": {"items": [], "extra_items": parked}})
     return output
+
+
+def _search_summary(
+    state: CareerAgentState, tool_results: list[dict[str, Any]], answer: str
+) -> dict[str, Any] | None:
+    """What this turn actually found, so a later turn can refer back to it."""
+    if state.get("intent") not in _CARRY_OVER_INTENTS:
+        return None
+    jobs: list[dict[str, Any]] = []
+    leads: list[dict[str, Any]] = []
+    for item in tool_results:
+        tool = item.get("tool")
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        if tool == "search_jobs":
+            jobs.extend(data.get("jobs") or [])
+            leads.extend(data.get("leads") or [])
+        elif tool == "import_official_jobs":
+            # Official imports always carry a full JD and have no status field.
+            jobs.extend(data.get("jobs") or [])
+    constraints = state.get("constraints") or {}
+    return {
+        "intent": state.get("intent"),
+        "cities": constraints.get("cities") or [],
+        "keywords": constraints.get("keywords") or [],
+        "job_types": constraints.get("job_types") or [],
+        "jobs": len(jobs),
+        "verified_jobs": sum(
+            1 for job in jobs if str(job.get("verification_status") or "verified") == "verified"
+        ),
+        "leads": len(leads),
+        "answer": (answer or "")[:240],
+    }
 
 
 def _aggregate(model: BaseChatModel):
@@ -605,10 +844,15 @@ def _aggregate(model: BaseChatModel):
         answer = final.content if hasattr(final, "content") else str(final)
         if isinstance(answer, str) and _lead_notice_needed(state) and _LEAD_NOTICE not in answer:
             answer = f"{answer.rstrip()}\n\n{_LEAD_NOTICE}"
+        scope = dict(state.get("last_scope") or {})
+        summary = _search_summary(state, tool_results, answer)
+        if summary:
+            scope["result_summary"] = summary
         return {
             "final_answer": answer,
             "tool_results": tool_results,
             "status": "partial" if state.get("errors") else "completed",
+            "last_scope": scope,
         }
 
     return node
@@ -616,7 +860,7 @@ def _aggregate(model: BaseChatModel):
 
 def build_supervisor(ctx: RuntimeContext, model: BaseChatModel, agents: dict[str, object]):
     graph = StateGraph(CareerAgentState)
-    graph.add_node("understand", _understand(model))
+    graph.add_node("understand", _understand(model, ctx))
     graph.add_node("chat", _chat(model))
     graph.add_node("execute", _execute(ctx, agents))
     graph.add_node("aggregate", _aggregate(model))

@@ -153,6 +153,28 @@ export function logout(): Promise<ApiResult<undefined>> {
   return request<undefined>("/api/v1/auth/logout", { method: "POST" });
 }
 
+/** Rotate the password from an authenticated session. */
+export function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<ApiResult<undefined>> {
+  return request<undefined>("/api/v1/auth/password", {
+    method: "POST",
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
+
+/** Forgotten-password reset; the API rejects it unless the deployment allows it. */
+export function resetPassword(
+  email: string,
+  newPassword: string,
+): Promise<ApiResult<undefined>> {
+  return request<undefined>("/api/v1/auth/password/reset", {
+    method: "POST",
+    body: { email, new_password: newPassword },
+  });
+}
+
 export function saveJob(
   jobId: string,
   listType: "saved" | "to_apply",

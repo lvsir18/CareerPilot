@@ -117,6 +117,75 @@ def test_expired_session_is_rejected(client: TestClient, db_session: Session) ->
     assert response.json()["error"]["code"] == "AUTH_REQUIRED"
 
 
+def test_change_password_keeps_current_session_and_rotates_credentials(
+    client: TestClient,
+) -> None:
+    register_user(client, email="change@example.com", password="old-pass-123")
+
+    response = client.post(
+        "/api/v1/auth/password",
+        json={"current_password": "old-pass-123", "new_password": "new-pass-456"},
+    )
+
+    assert response.status_code == 204
+    # Changing the password must not log the current tab out.
+    assert client.get("/api/v1/auth/me").status_code == 200
+
+    client.post("/api/v1/auth/logout")
+    old = client.post(
+        "/api/v1/auth/login",
+        json={"email": "change@example.com", "password": "old-pass-123"},
+    )
+    assert old.status_code == 401
+    new = client.post(
+        "/api/v1/auth/login",
+        json={"email": "change@example.com", "password": "new-pass-456"},
+    )
+    assert new.status_code == 200
+
+
+def test_change_password_requires_the_current_password(client: TestClient) -> None:
+    register_user(client, email="wrong-current@example.com", password="old-pass-123")
+
+    response = client.post(
+        "/api/v1/auth/password",
+        json={"current_password": "not-the-password", "new_password": "new-pass-456"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
+
+
+def test_password_reset_is_disabled_by_default(client: TestClient) -> None:
+    register_user(client, email="reset-off@example.com", password="old-pass-123")
+
+    response = client.post(
+        "/api/v1/auth/password/reset",
+        json={"email": "reset-off@example.com", "new_password": "new-pass-456"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "PASSWORD_RESET_DISABLED"
+
+
+def test_password_reset_works_when_enabled(client: TestClient, settings, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "password_reset_enabled", True)
+    register_user(client, email="reset-on@example.com", password="old-pass-123")
+    client.post("/api/v1/auth/logout")
+
+    response = client.post(
+        "/api/v1/auth/password/reset",
+        json={"email": "reset-on@example.com", "new_password": "new-pass-456"},
+    )
+
+    assert response.status_code == 204
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "reset-on@example.com", "password": "new-pass-456"},
+    )
+    assert login.status_code == 200
+
+
 def test_protected_endpoints_require_login(client: TestClient) -> None:
     for path in (
         "/api/v1/auth/me",

@@ -9,7 +9,13 @@ from app.auth.dependencies import AppSettings, CurrentUser, DbSession
 from app.auth.service import AuthService
 from app.auth.session import clear_session_cookie, set_session_cookie
 from app.core.errors import AppError
-from app.schemas.auth import LoginRequest, RegisterRequest, UserRead
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    PasswordResetRequest,
+    RegisterRequest,
+    UserRead,
+)
 from app.schemas.common import DataResponse
 from app.security.csrf import (
     clear_csrf_cookie,
@@ -126,6 +132,67 @@ def logout(
     AuthService(session, settings).logout(request.cookies.get(settings.session_cookie_name))
     clear_session_cookie(response, settings)
     clear_csrf_cookie(response, settings)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post(
+    "/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="修改密码（需要当前密码）",
+    dependencies=[Depends(require_csrf)],
+)
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    response: Response,
+    session: DbSession,
+    settings: AppSettings,
+    user: CurrentUser,
+) -> Response:
+    AuthService(session, settings).change_password(
+        user,
+        payload.current_password,
+        payload.new_password,
+        # Keep the caller's own session so changing the password does not log
+        # the user out of the tab they are using.
+        keep_token=request.cookies.get(settings.session_cookie_name),
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post(
+    "/password/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="忘记密码时凭邮箱重置（仅本地个人版开启）",
+    dependencies=[Depends(verify_origin_dependency)],
+)
+def reset_password(
+    payload: PasswordResetRequest,
+    request: Request,
+    response: Response,
+    session: DbSession,
+    settings: AppSettings,
+    limiter: LoginRateLimiter = Depends(get_login_rate_limiter),
+) -> Response:
+    if not settings.password_reset_enabled:
+        raise AppError(
+            code="PASSWORD_RESET_DISABLED",
+            message="本部署未开启密码重置，请联系管理员或手动修改数据库",
+            status_code=403,
+        )
+    # Same limiter as login: a reset endpoint without throttling is a free
+    # account-takeover primitive on a local network.
+    decision = limiter.consume(
+        "password-reset",
+        ip=get_client_ip(request, settings),
+        email=str(payload.email),
+    )
+    if not decision.allowed:
+        raise _rate_limit_error(decision)
+
+    AuthService(session, settings).reset_password(str(payload.email), payload.new_password)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 

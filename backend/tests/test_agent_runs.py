@@ -471,10 +471,10 @@ def test_run_list_exposes_the_question_it_answered(
     assert runs[0]["input_message"] == "帮我找北京的大模型实习"
 
 
-def test_reconcile_marks_runs_orphaned_by_a_dead_worker(
+def test_reconcile_requeues_runs_orphaned_by_a_dead_worker(
     app: FastAPI, settings: Settings, db_session: Session
 ) -> None:
-    """A restart mid-run used to leave the row ``running`` forever."""
+    """A restart mid-run must not throw the question away."""
     from app.agents.run_service import AgentRunService
 
     run = _create_running_run(app, settings, db_session, "reconcile-orphan@example.com")
@@ -482,10 +482,69 @@ def test_reconcile_marks_runs_orphaned_by_a_dead_worker(
     fixed = AgentRunService(db_session).reconcile_stale_runs()
 
     db_session.refresh(run)
+    assert run.status == "queued"
+    assert run.started_at is None
+    assert run.error_code is None
+    assert fixed == [{"run_id": str(run.id), "status": "requeued"}]
+
+
+def test_reconcile_fails_once_attempts_are_exhausted(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    from app.agents.run_service import MAX_RUN_ATTEMPTS, AgentRunService
+
+    run = _create_running_run(app, settings, db_session, "reconcile-exhausted@example.com")
+    run.attempt_count = MAX_RUN_ATTEMPTS
+    db_session.commit()
+
+    fixed = AgentRunService(db_session).reconcile_stale_runs()
+
+    db_session.refresh(run)
     assert run.status == "failed"
     assert run.error_code == "RUN_INTERRUPTED"
-    assert run.finished_at is not None
     assert fixed == [{"run_id": str(run.id), "status": "failed"}]
+
+
+def test_claim_takes_over_a_run_left_running_by_a_dead_worker(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    """``acks_late`` re-delivers the message; the claim must accept it."""
+    from sqlalchemy import select
+
+    from app.agents.run_service import AgentRunService
+    from app.db.models.agent_run import AgentRunEvent
+
+    run = _create_running_run(app, settings, db_session, "reconcile-claim@example.com")
+    service = AgentRunService(db_session)
+
+    assert service.claim(run) is True
+
+    db_session.refresh(run)
+    assert run.status == "running"
+    assert run.attempt_count == 1
+    events = list(
+        db_session.scalars(
+            select(AgentRunEvent)
+            .where(AgentRunEvent.run_id == run.id)
+            .order_by(AgentRunEvent.sequence)
+        )
+    )
+    assert events[-1].event_type == "run.resumed"
+    assert events[-1].safe_payload["reason"] == "takeover"
+
+
+def test_claim_refuses_a_cancelled_running_run(
+    app: FastAPI, settings: Settings, db_session: Session
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.agents.run_service import AgentRunService
+
+    run = _create_running_run(app, settings, db_session, "reconcile-claim-cancel@example.com")
+    run.cancel_requested_at = datetime.now(UTC)
+    db_session.commit()
+
+    assert AgentRunService(db_session).claim(run) is False
 
 
 def test_reconcile_honours_cancel_without_a_live_worker(

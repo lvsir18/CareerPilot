@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     session_secret: str = PLACEHOLDER_SECRET
     session_cookie_name: str = "careerpilot_session"
     auth_session_ttl_days: int = Field(default=7, ge=1, le=30)
+    # Argon2 is one-way, so a forgotten password cannot be recovered. Local
+    # single-user deployments may opt into a direct email reset; production
+    # keeps it off by default.
+    password_reset_enabled: bool = False
 
     # Cookie / CSRF hardening. ``cookie_secure=None`` means "true only in production".
     cookie_secure: bool | None = None

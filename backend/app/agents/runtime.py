@@ -92,3 +92,12 @@ class CareerAgentState(TypedDict, total=False):
     status: str
     errors: list[str]
     final_answer: str | None
+    # Previous turn, kept so follow-ups ("那杭州呢" / "第一个岗位") can be resolved
+    # and omitted constraints can be carried over deterministically.
+    previous_intent: str
+    previous_question: str
+    previous_answer: str
+    previous_constraints: dict[str, Any]
+    # Last turn that actually searched (chit-chat/progress turns do not clear
+    # it), so "把第一个岗位的 JD 发我" still points at the right search.
+    last_scope: dict[str, Any]

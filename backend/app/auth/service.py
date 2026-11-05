@@ -107,3 +107,54 @@ class AuthService:
                 UserSession.expires_at > datetime.now(UTC),
             )
         )
+
+    def change_password(
+        self,
+        user: User,
+        current_password: str,
+        new_password: str,
+        *,
+        keep_token: str | None = None,
+    ) -> None:
+        """Rotate the password after proving knowledge of the current one."""
+        if not verify_password(current_password, user.password_hash):
+            raise AppError(
+                code="INVALID_CREDENTIALS",
+                message="当前密码不正确",
+                status_code=400,
+            )
+        self._replace_password(user, new_password, keep_token=keep_token)
+        logger.info("password_changed", extra={"user_id": str(user.id)})
+
+    def reset_password(self, email: str, new_password: str) -> User:
+        """Forgotten-password path; the API gates it behind a config flag."""
+        user = self._find_by_email(normalize_email(email))
+        if user is None:
+            raise AppError(
+                code="ACCOUNT_NOT_FOUND",
+                message="该邮箱尚未注册",
+                status_code=404,
+            )
+        self._replace_password(user, new_password)
+        logger.info("password_reset", extra={"user_id": str(user.id)})
+        return user
+
+    def _replace_password(
+        self, user: User, new_password: str, *, keep_token: str | None = None
+    ) -> None:
+        user.password_hash = hash_password(new_password)
+        # Other devices must not keep working with the old password's sessions;
+        # the caller's own session stays valid so the UI is not kicked out.
+        keep_hash = hash_session_token(keep_token) if keep_token else None
+        now = datetime.now(UTC)
+        sessions = self._session.scalars(
+            select(UserSession).where(
+                UserSession.user_id == user.id,
+                UserSession.revoked_at.is_(None),
+            )
+        ).all()
+        for row in sessions:
+            if keep_hash is not None and row.token_hash == keep_hash:
+                continue
+            row.revoked_at = now
+        self._session.commit()

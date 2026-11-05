@@ -238,6 +238,410 @@ def test_understand_resets_previous_turn_results(settings) -> None:
     assert update["final_answer"] is None
 
 
+def test_followup_carries_over_job_type_and_keywords(settings) -> None:
+    """「那杭州呢」只换城市，实习与大模型必须保留（否则会混入校招）。"""
+    from app.agents.supervisor import _understand
+
+    node = _understand(ScriptedModel("job_search"))
+    state = {
+        "messages": [
+            HumanMessage(content="帮我找北京的大模型实习"),
+            AIMessage(content="北京的大模型实习有 20 个"),
+            HumanMessage(content="那杭州呢"),
+        ],
+        "intent": "job_search",
+        "constraints": {
+            "intent": "job_search",
+            "cities": ["北京"],
+            "keywords": ["大模型"],
+            "job_types": ["实习"],
+        },
+        "final_answer": "北京的大模型实习有 20 个",
+    }
+
+    update = node(state)
+
+    assert update["constraints"]["keywords"] == ["大模型"]
+    assert update["constraints"]["job_types"] == ["实习"]
+    # 模型没给城市时沿用上一轮；模型给了就以模型为准（见下面的用例）。
+    assert update["constraints"]["cities"] == ["北京"]
+    assert update["previous_constraints"]["cities"] == ["北京"]
+    assert update["previous_question"] == "帮我找北京的大模型实习"
+    assert update["previous_answer"] == "北京的大模型实习有 20 个"
+
+
+def test_explicit_city_wins_over_the_previous_one(settings) -> None:
+    """「那杭州呢」：模型给出的城市必须覆盖上一轮的北京。"""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents.supervisor import _understand
+
+    class CityModel(ScriptedModel):
+        def bind_tools(self, tools):
+            def invoke(messages):
+                return _AI(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "Intent",
+                            "args": {"intent": "job_search", "cities": ["杭州"]},
+                            "id": "i",
+                        }
+                    ],
+                )
+
+            return SimpleNamespace(invoke=invoke)
+
+    node = _understand(CityModel("job_search"))
+    update = node(
+        {
+            "messages": [
+                HumanMessage(content="帮我找北京的大模型实习"),
+                HumanMessage(content="那杭州呢"),
+            ],
+            "intent": "job_search",
+            "constraints": {
+                "intent": "job_search",
+                "cities": ["北京"],
+                "keywords": ["大模型"],
+                "job_types": ["实习"],
+            },
+        }
+    )
+
+    assert update["constraints"]["cities"] == ["杭州"]
+    assert update["constraints"]["job_types"] == ["实习"]
+
+
+def test_chitchat_turn_does_not_break_followup_scope(settings) -> None:
+    """「刚才你找到几个」是闲聊轮，不能让下一轮的指代丢失城市。"""
+    from app.agents.supervisor import _understand
+
+    node = _understand(ScriptedModel("job_match"))
+    state = {
+        "messages": [
+            HumanMessage(content="帮我找杭州的大模型实习"),
+            AIMessage(content="杭州有 8 个岗位"),
+            HumanMessage(content="刚才你找到几个"),
+            AIMessage(content="我这边没有保留上一次的记录"),
+            HumanMessage(content="把第一个岗位的 JD 发我"),
+        ],
+        "intent": "chitchat",
+        "constraints": {"intent": "chitchat"},
+        "last_scope": {
+            "intent": "job_search",
+            "keywords": ["大模型"],
+            "companies": [],
+            "cities": ["杭州"],
+            "job_types": ["实习"],
+            "exclude_applied": False,
+        },
+        "final_answer": "我这边没有保留上一次的记录",
+    }
+
+    update = node(state)
+
+    assert update["constraints"]["keywords"] == ["大模型"]
+    assert update["constraints"]["job_types"] == ["实习"]
+    assert update["constraints"]["cities"] == ["杭州"]
+
+
+def test_new_intent_does_not_carry_over_scope(settings) -> None:
+    """换了意图（找岗位 → 查进度）时不能把上一轮的检索条件带过去。"""
+    from app.agents.supervisor import _understand
+
+    node = _understand(ScriptedModel("progress_query"))
+    state = {
+        "messages": [
+            HumanMessage(content="帮我找北京的大模型实习"),
+            HumanMessage(content="我的申请进度呢"),
+        ],
+        "intent": "job_search",
+        "constraints": {"intent": "job_search", "keywords": ["大模型"], "job_types": ["实习"]},
+    }
+
+    update = node(state)
+
+    assert update["constraints"]["keywords"] == []
+    assert update["constraints"]["job_types"] == []
+
+
+def test_intent_model_receives_the_previous_turn(settings) -> None:
+    """The intent model must see the last Q/A, otherwise 指代无法解析。"""
+    from app.agents.supervisor import _understand
+
+    captured: dict = {}
+
+    class CapturingModel(ScriptedModel):
+        def bind_tools(self, tools):
+            def invoke(messages):
+                captured.update(json.loads(messages[-1].content))
+                return AIMessage(
+                    content="",
+                    tool_calls=[{"name": "Intent", "args": {"intent": "job_search"}, "id": "i"}],
+                )
+
+            return SimpleNamespace(invoke=invoke)
+
+    node = _understand(CapturingModel("job_search"))
+    node(
+        {
+            "messages": [
+                HumanMessage(content="帮我找北京的大模型实习"),
+                AIMessage(content="北京有 20 个岗位"),
+                HumanMessage(content="把第一个岗位的 JD 发我"),
+            ],
+            "intent": "job_search",
+            "constraints": {"cities": ["北京"]},
+            "final_answer": "北京有 20 个岗位",
+        }
+    )
+
+    assert captured["previous"]["question"] == "帮我找北京的大模型实习"
+    assert captured["previous"]["answer"] == "北京有 20 个岗位"
+    assert captured["previous"]["constraints"]["cities"] == ["北京"]
+
+
+def test_long_conversation_trims_the_oldest_turns(settings) -> None:
+    """长对话不能无限增长；只保留最近若干条，范围由 last_scope 兜底。"""
+    from langchain_core.messages import RemoveMessage as _Remove
+
+    from app.agents.supervisor import _understand
+
+    node = _understand(ScriptedModel("job_search"))
+    messages = [HumanMessage(content=f"问题 {index}", id=f"m{index}") for index in range(14)]
+
+    update = node({"messages": messages, "intent": "job_search", "constraints": {}})
+
+    removed = update["messages"]
+    assert len(removed) == 4  # 14 - keep(10)
+    assert all(isinstance(item, _Remove) for item in removed)
+    assert [item.id for item in removed] == ["m0", "m1", "m2", "m3"]
+
+
+def test_short_conversation_keeps_all_messages(settings) -> None:
+    from app.agents.supervisor import _understand
+
+    node = _understand(ScriptedModel("chitchat"))
+    update = node(
+        {
+            "messages": [
+                HumanMessage(content="你好", id="a"),
+                HumanMessage(content="我是谁", id="b"),
+            ],
+            "intent": "chitchat",
+            "constraints": {},
+        }
+    )
+
+    assert update["messages"] == []
+
+
+def test_split_matches_filters_cards_by_job_type() -> None:
+    """「实习」请求不能把校招岗位混进卡片与推荐。"""
+    from app.agents.supervisor import _split_matches
+
+    tool_results = [
+        {
+            "tool": "search_jobs",
+            "data": {
+                "jobs": [
+                    {
+                        "company": "字节跳动",
+                        "title": "实习岗",
+                        "city": "杭州",
+                        "job_type": "internship",
+                    },
+                    {
+                        "company": "字节跳动",
+                        "title": "校招岗",
+                        "city": "杭州",
+                        "job_type": "campus",
+                    },
+                ],
+                "leads": [
+                    {
+                        "company": "美团",
+                        "title": "实习线索",
+                        "city": "杭州",
+                        "job_type": "internship",
+                    },
+                    {"company": "美团", "title": "校招线索", "city": "杭州", "job_type": "campus"},
+                ],
+            },
+        }
+    ]
+
+    output = _split_matches(tool_results, {"cities": ["杭州"], "job_types": ["实习"]})
+
+    search = next(item for item in output if item["tool"] == "search_jobs")
+    assert [job["title"] for job in search["data"]["jobs"]] == ["实习岗"]
+    assert [lead["title"] for lead in search["data"]["leads"]] == ["实习线索"]
+
+
+def test_match_summary_respects_job_type() -> None:
+    from app.agents.supervisor import _match_summary
+
+    tool_results = [
+        {
+            "tool": "import_official_jobs",
+            "data": {
+                "company": "字节跳动",
+                "jobs": [
+                    {"title": "实习岗", "city": "杭州", "job_type": "internship"},
+                    {"title": "校招岗", "city": "杭州", "job_type": "campus"},
+                ],
+            },
+        }
+    ]
+
+    included, _ = _match_summary(tool_results, {"cities": ["杭州"], "job_types": ["实习"]})
+
+    assert [item["title"] for item in included] == ["实习岗"]
+
+
+def test_preferences_come_from_the_confirmed_profile(monkeypatch) -> None:
+    """长期记忆：已确认画像的偏好要进入意图上下文。"""
+    from app.agents import supervisor as module
+
+    captured: dict = {}
+
+    class FakeProfile:
+        verified_by_user = True
+        preferences = SimpleNamespace(
+            cities=["成都"],
+            job_types=["internship"],
+            keywords=["大模型"],
+            excluded_keywords=["外包"],
+            target_companies=["bytedance"],
+        )
+
+    monkeypatch.setattr(
+        module.ProfileService, "get", lambda self, user: FakeProfile(), raising=False
+    )
+
+    class CapturingModel(ScriptedModel):
+        def bind_tools(self, tools):
+            def invoke(messages):
+                captured.update(json.loads(messages[-1].content))
+                return AIMessage(
+                    content="",
+                    tool_calls=[{"name": "Intent", "args": {"intent": "job_search"}, "id": "i"}],
+                )
+
+            return SimpleNamespace(invoke=invoke)
+
+    ctx = SimpleNamespace(session=None, user=None)
+    node = module._understand(CapturingModel("job_search"), ctx)
+    node({"messages": [HumanMessage(content="帮我找岗位")]})
+
+    assert captured["user_preferences"]["cities"] == ["成都"]
+    assert captured["user_preferences"]["job_types"] == ["internship"]
+    assert captured["user_preferences"]["excluded_keywords"] == ["外包"]
+
+
+def test_unconfirmed_profile_contributes_no_preferences(monkeypatch) -> None:
+    from app.agents import supervisor as module
+
+    class FakeProfile:
+        verified_by_user = False
+        preferences = SimpleNamespace(
+            cities=["成都"],
+            job_types=["internship"],
+            keywords=[],
+            excluded_keywords=[],
+            target_companies=[],
+        )
+
+    monkeypatch.setattr(
+        module.ProfileService, "get", lambda self, user: FakeProfile(), raising=False
+    )
+
+    assert module._preferences(SimpleNamespace(session=None, user=None)) == {}
+
+
+def test_chat_answers_recall_from_previous_results(settings) -> None:
+    """「刚才找到几个」必须引用上一轮统计，而不是说「没保留记录」。"""
+    from app.agents.supervisor import _chat
+
+    captured: dict = {}
+
+    class ChatModel:
+        def invoke(self, messages):
+            captured.update(json.loads(messages[-1].content))
+            return AIMessage(content="上一轮杭州找到 8 个岗位")
+
+    node = _chat(ChatModel())
+    update = node(
+        {
+            "messages": [HumanMessage(content="刚才杭州那边你找到几个岗位？")],
+            "last_scope": {
+                "intent": "job_search",
+                "cities": ["杭州"],
+                "result_summary": {"jobs": 8, "verified_jobs": 6, "leads": 2},
+            },
+        }
+    )
+
+    assert captured["question"] == "刚才杭州那边你找到几个岗位？"
+    assert captured["previous_results"]["jobs"] == 8
+    assert captured["previous_results"]["verified_jobs"] == 6
+    assert update["final_answer"] == "上一轮杭州找到 8 个岗位"
+
+
+def test_chat_without_previous_scope_sends_plain_text(settings) -> None:
+    from app.agents.supervisor import _chat
+
+    seen: dict = {}
+
+    class ChatModel:
+        def invoke(self, messages):
+            seen["content"] = messages[-1].content
+            return AIMessage(content="你好")
+
+    node = _chat(ChatModel())
+    node({"messages": [HumanMessage(content="你好")]})
+
+    assert seen["content"] == "你好"
+
+
+def test_aggregate_remembers_search_summary() -> None:
+    """检索轮要把数量记进 last_scope，供下一轮「刚才找到几个」使用。"""
+    from app.agents.supervisor import _aggregate
+
+    node = _aggregate(SimpleNamespace(invoke=lambda messages: AIMessage(content="杭州 2 个岗位")))
+
+    update = node(
+        {
+            "messages": [HumanMessage(content="帮我找杭州的大模型实习")],
+            "intent": "job_search",
+            "constraints": {"cities": ["杭州"], "keywords": ["大模型"], "job_types": ["实习"]},
+            "tool_results": [
+                {
+                    "tool": "search_jobs",
+                    "data": {
+                        "jobs": [{"title": "A", "verification_status": "verified"}],
+                        "leads": [{"title": "B", "verification_status": "search_snippet_only"}],
+                    },
+                },
+                {
+                    "tool": "import_official_jobs",
+                    "data": {"company": "字节跳动", "jobs": [{"title": "C"}]},
+                },
+            ],
+            "last_scope": {"intent": "job_search", "cities": ["杭州"]},
+        }
+    )
+
+    summary = update["last_scope"]["result_summary"]
+    assert summary["jobs"] == 2  # search 1 + official 1
+    assert summary["verified_jobs"] == 2  # official imports count as verified
+    assert summary["leads"] == 1
+    assert summary["cities"] == ["杭州"]
+    assert summary["job_types"] == ["实习"]
+    assert summary["answer"] == "杭州 2 个岗位"
+
+
 def test_execute_keeps_readable_tool_error_message() -> None:
     """A failed tool must report *why*: "TOOL_FAILED" alone is not actionable."""
     from app.agents.supervisor import _execute

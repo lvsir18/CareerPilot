@@ -28,6 +28,32 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+def _ensure_not_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("密码不能全为空白字符")
+    return value
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: Password
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password_not_blank(cls, value: str) -> str:
+        return _ensure_not_blank(value)
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+    new_password: Password
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password_not_blank(cls, value: str) -> str:
+        return _ensure_not_blank(value)
+
+
 class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
