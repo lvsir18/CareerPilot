@@ -54,10 +54,19 @@ def list_jobs(
         default=None, description="true 仅返回有可核验发布时间的岗位"
     ),
     status: JobStatus | None = None,
+    archived: bool = Query(
+        default=False, description="仅管理员：查看已归档岗位（软删除，历史记录仍保留）"
+    ),
     sort: JobSort = "published_at_desc",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=50),
 ) -> Page[JobListItem]:
+    if archived and _user.email.strip().lower() not in settings.admin_email_set:
+        raise AppError(
+            code="ADMIN_REQUIRED",
+            message="查看已归档岗位需要管理员权限",
+            status_code=403,
+        )
     after = _as_utc(published_after)
     before = _as_utc(published_before)
     if after is not None and before is not None and after > before:
@@ -80,6 +89,7 @@ def list_jobs(
             published_before=before,
             published_date_known=published_date_known,
             status=status,
+            archived=archived,
             sort=sort,
             page=page,
             page_size=page_size,

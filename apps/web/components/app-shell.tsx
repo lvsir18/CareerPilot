@@ -11,6 +11,7 @@ import {
   FilePlus2,
   FileText,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Menu,
   Settings,
@@ -19,9 +20,10 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import { logout } from "@/lib/client-api";
+import { getActivity, logout } from "@/lib/client-api";
+import type { ActivitySnapshot } from "@/lib/api";
 import { clearAllProfileDrafts } from "@/lib/profile-draft";
 import { cn } from "@/lib/utils";
 
@@ -104,7 +106,36 @@ export function AppShell({
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
+  const [activity, setActivity] = useState<ActivitySnapshot | null>(null);
   const current = NAV_ITEMS.find((item) => item.href && isActive(pathname, item.href));
+
+  // Long tasks run in Celery, not in the page: poll so the sidebar keeps showing
+  // a spinner after the user navigates away from 岗位库 / Agent 工作台.
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      const result = await getActivity();
+      if (!cancelled && result.ok) {
+        setActivity(result.data);
+      }
+    }
+    void poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  function isBusy(href: string | undefined): boolean {
+    if (href === "/jobs") {
+      return Boolean(activity?.job_maintenance);
+    }
+    if (href === "/agent") {
+      return Boolean(activity?.agent);
+    }
+    return false;
+  }
 
   function renderNav(onNavigate?: () => void): ReactNode {
     return NAV_ITEMS.map((item) =>
@@ -125,6 +156,12 @@ export function AppShell({
             {item.icon}
             {item.label}
           </span>
+          {isBusy(item.href) ? (
+            <Loader2
+              className="size-3.5 animate-spin text-sky-400"
+              aria-label="后台任务运行中"
+            />
+          ) : null}
         </Link>
       ) : (
         <div

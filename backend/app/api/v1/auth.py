@@ -202,5 +202,8 @@ def reset_password(
     response_model=DataResponse[UserRead],
     summary="当前登录用户",
 )
-def me(user: CurrentUser) -> DataResponse[UserRead]:
-    return DataResponse(data=UserRead.model_validate(user))
+def me(user: CurrentUser, settings: AppSettings) -> DataResponse[UserRead]:
+    data = UserRead.model_validate(user).model_copy(
+        update={"is_admin": user.email.strip().lower() in settings.admin_email_set}
+    )
+    return DataResponse(data=data)

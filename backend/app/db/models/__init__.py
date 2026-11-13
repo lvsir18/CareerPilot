@@ -21,6 +21,7 @@ from app.db.models.enums import (
 from app.db.models.external_account import ExternalAccountConnection
 from app.db.models.job import Company, Job, JobSource
 from app.db.models.job_lead import JobLead, SourceEvidence
+from app.db.models.job_maintenance import JobMaintenanceRun
 from app.db.models.mailbox import (
     MailboxConnection,
     MailboxSyncCursor,
@@ -52,6 +53,7 @@ __all__ = [
     "ExternalConnectionStatus",
     "Job",
     "JobLead",
+    "JobMaintenanceRun",
     "JobPreference",
     "JobSource",
     "JobSourceMethod",

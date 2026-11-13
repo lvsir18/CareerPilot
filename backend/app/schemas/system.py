@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -50,3 +51,28 @@ class SystemInfoResponse(BaseModel):
     public_connectors_enabled: bool
     job_sync_enabled: bool
     api_docs_url: str
+
+
+class JobMaintenanceActivity(BaseModel):
+    run_id: UUID
+    kind: str
+    status: str
+    total: int = 0
+    processed: int = 0
+
+
+class AgentActivity(BaseModel):
+    run_id: UUID
+    thread_id: UUID
+    status: str
+
+
+class ActivityResponse(BaseModel):
+    """What this user has running in the background right now.
+
+    The sidebar polls this so a long job refresh or agent turn keeps showing a
+    spinner after the user navigates to another page.
+    """
+
+    job_maintenance: JobMaintenanceActivity | None = None
+    agent: AgentActivity | None = None

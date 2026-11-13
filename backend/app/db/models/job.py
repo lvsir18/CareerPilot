@@ -80,6 +80,8 @@ class Job(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_jobs_status", "status"),
         Index("ix_jobs_recruitment_program", "recruitment_program"),
         Index("ix_jobs_duplicate_group_key", "duplicate_group_key"),
+        Index("ix_jobs_archived_at", "archived_at"),
+        Index("ix_jobs_last_verified_at", "last_verified_at"),
     )
 
     source_id: Mapped[UUID] = mapped_column(
@@ -103,6 +105,10 @@ class Job(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Only set when a check actually confirmed the posting (open or closed).
+    # Failed checks update ``last_checked_at`` but must stay retryable, so the
+    # re-check cooldown filters on this column instead.
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[JobStatus] = mapped_column(
         enum_column(JobStatus, "job_status", length=16),
         default=JobStatus.UNKNOWN,
@@ -130,6 +136,16 @@ class Job(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=text("'{}'::jsonb"),
     )
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    # Soft archive: a closed posting disappears from search/recommendations but
+    # saved jobs, applications and match history keep pointing at it.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    archive_reason: Mapped[str | None] = mapped_column(String(200))
+    archive_evidence_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONType, default=dict, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
     source: Mapped[JobSource] = relationship(back_populates="jobs", lazy="selectin")
     company: Mapped[Company] = relationship(lazy="selectin")

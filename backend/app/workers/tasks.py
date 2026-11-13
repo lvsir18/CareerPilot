@@ -333,3 +333,23 @@ def run_agent_run(self, run_id: str) -> dict[str, Any]:
             check_cancel=False,
         )
         return {"status": final}
+
+
+@celery_app.task(name="careerpilot.job_refresh")
+def job_refresh(run_id: str, recheck: bool = True, discover: bool = False) -> dict[str, Any]:
+    """Re-check existing postings and/or discover new ones for one batch."""
+    from app.services.job_maintenance_service import JobMaintenanceService
+
+    with session_scope() as session:
+        return JobMaintenanceService(session, get_settings()).execute_refresh(
+            UUID(run_id), recheck=recheck, discover=discover
+        )
+
+
+@celery_app.task(name="careerpilot.job_prune")
+def job_prune(run_id: str) -> dict[str, Any]:
+    """Soft-archive postings that carry an explicit closure record."""
+    from app.services.job_maintenance_service import JobMaintenanceService
+
+    with session_scope() as session:
+        return JobMaintenanceService(session, get_settings()).execute_prune(UUID(run_id))

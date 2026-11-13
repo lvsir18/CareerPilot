@@ -60,3 +60,6 @@ class UserRead(BaseModel):
     id: UUID
     email: str
     created_at: datetime
+    # Only the /auth/me response fills this: the UI hides library-wide archive
+    # actions from non-admins instead of letting them click into a 403.
+    is_admin: bool = False

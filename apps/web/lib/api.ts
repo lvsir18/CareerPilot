@@ -57,6 +57,69 @@ export interface SessionUser {
   id: string;
   email: string;
   created_at: string;
+  /** Only /auth/me fills this; used to show library-wide archive actions. */
+  is_admin?: boolean;
+}
+
+export interface MaintenanceScope {
+  q?: string | null;
+  companies: string[];
+  cities: string[];
+  job_types: string[];
+  source_types: string[];
+  recruitment_programs: string[];
+}
+
+export interface MaintenanceItem {
+  job_id: string | null;
+  company: string | null;
+  title: string | null;
+  city: string | null;
+  status?: string | null;
+  archived?: boolean;
+  outcome: string;
+  reason?: string | null;
+  closed_checked_at?: string | null;
+  closed_evidence?: string | null;
+}
+
+export interface MaintenanceRun {
+  id: string;
+  kind: "refresh" | "discover" | "prune";
+  status: string;
+  progress: {
+    total?: number;
+    processed?: number;
+    current?: string;
+    counters?: Record<string, number>;
+  };
+  result: {
+    items?: MaintenanceItem[];
+    counters?: Record<string, number>;
+    unsupported?: { name: string; reason: string }[];
+  };
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface PrunePreview {
+  count: number;
+  items: MaintenanceItem[];
+  truncated: boolean;
+}
+
+/** Non-terminal background work owned by the current user. */
+export interface ActivitySnapshot {
+  job_maintenance: {
+    run_id: string;
+    kind: string;
+    status: string;
+    total: number;
+    processed: number;
+  } | null;
+  agent: { run_id: string; thread_id: string; status: string } | null;
 }
 
 export interface PageMeta {

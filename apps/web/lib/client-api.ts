@@ -7,6 +7,7 @@
 
 import {
   toApiError,
+  type ActivitySnapshot,
   type AgentMessage,
   type AgentRun,
   type AgentRunEventItem,
@@ -26,6 +27,9 @@ import {
   type MailboxDeleteResult,
   type JobLead,
   type JobLeadDetail,
+  type MaintenanceRun,
+  type MaintenanceScope,
+  type PrunePreview,
   type MailboxConnection,
   type MailboxSyncRun,
   type Profile,
@@ -172,6 +176,56 @@ export function resetPassword(
   return request<undefined>("/api/v1/auth/password/reset", {
     method: "POST",
     body: { email, new_password: newPassword },
+  });
+}
+
+export function getActivity(): Promise<ApiResult<ActivitySnapshot>> {
+  return request<ActivitySnapshot>("/api/v1/system/activity");
+}
+
+export function startJobMaintenance(payload: {
+  kind: "refresh" | "discover";
+  scope: MaintenanceScope;
+  recheck: boolean;
+  discover: boolean;
+  max_jobs?: number;
+  cooldown_hours?: number;
+}): Promise<ApiResult<{ run_id: string; status: string; reused: boolean }>> {
+  return request("/api/v1/job-maintenance", { method: "POST", body: payload });
+}
+
+export function startJobPrune(
+  scope: MaintenanceScope,
+): Promise<ApiResult<{ run_id: string; status: string; reused: boolean }>> {
+  return request("/api/v1/job-maintenance/prune", {
+    method: "POST",
+    body: { kind: "prune", scope },
+  });
+}
+
+export function getJobMaintenance(runId: string): Promise<ApiResult<MaintenanceRun>> {
+  return request<MaintenanceRun>(`/api/v1/job-maintenance/${runId}`);
+}
+
+export function cancelJobMaintenance(runId: string): Promise<ApiResult<undefined>> {
+  return request<undefined>(`/api/v1/job-maintenance/${runId}/cancel`, { method: "POST" });
+}
+
+export function previewJobPrune(scope: MaintenanceScope): Promise<ApiResult<PrunePreview>> {
+  const params = new URLSearchParams();
+  if (scope.q) params.set("q", scope.q);
+  if (scope.cities.length) params.set("cities", scope.cities.join(","));
+  if (scope.companies.length) params.set("companies", scope.companies.join(","));
+  if (scope.job_types.length) params.set("job_types", scope.job_types.join(","));
+  const query = params.toString();
+  return request<PrunePreview>(
+    `/api/v1/job-maintenance/prune-preview${query ? `?${query}` : ""}`,
+  );
+}
+
+export function restoreArchivedJob(jobId: string): Promise<ApiResult<Record<string, unknown>>> {
+  return request<Record<string, unknown>>(`/api/v1/job-maintenance/jobs/${jobId}/restore`, {
+    method: "POST",
   });
 }
 

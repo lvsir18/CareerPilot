@@ -223,6 +223,17 @@ export function JobDiscoveryPanel() {
     );
   }
 
+  const allCompaniesSelected = COMPANIES.every((item) => companies.includes(item.value));
+
+  function toggleAllCompanies() {
+    // 一键全选 / 取消全选：已全选时清空，否则选中所有公司。
+    setCompanies((current) =>
+      COMPANIES.every((item) => current.includes(item.value))
+        ? []
+        : COMPANIES.map((item) => item.value),
+    );
+  }
+
   async function runSearch(page = 1) {
     if (companies.length === 0) {
       setError("至少选择一家企业。");
@@ -312,8 +323,21 @@ export function JobDiscoveryPanel() {
             />
           </label>
           <div className="md:col-span-5">
-            <span className="text-xs font-medium text-slate-600">企业（可多选）</span>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 rounded-lg border border-slate-200 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-600">企业（可多选）</span>
+              <button
+                type="button"
+                onClick={toggleAllCompanies}
+                aria-pressed={allCompaniesSelected}
+                className="text-[11px] font-medium text-sky-700 hover:underline"
+              >
+                {allCompaniesSelected ? "取消全部" : "全部"}
+              </button>
+            </div>
+            <div
+              data-testid="company-filters"
+              className="mt-1 flex flex-wrap gap-x-3 gap-y-1 rounded-lg border border-slate-200 px-3 py-2"
+            >
               {COMPANIES.map((item) => (
                 <label key={item.value} className="inline-flex items-center gap-1.5 text-xs text-slate-700">
                   <input

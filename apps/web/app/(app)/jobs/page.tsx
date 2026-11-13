@@ -3,8 +3,11 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRight, Briefcase, CircleAlert, Search } from "lucide-react";
 
 import { JobCard } from "@/components/job-card";
+import { JobMaintenancePanel } from "@/components/job-maintenance-panel";
+import { RestoreJobButton } from "@/components/restore-job-button";
 import { StatusPill } from "@/components/status-pill";
 import { fetchJobLeads, fetchJobs } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
 import { jobPageHref, parseJobFilters, type JobFilters } from "@/lib/job-filters";
 
@@ -27,12 +30,28 @@ export default async function JobsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const filters = parseJobFilters(await searchParams);
+  const rawParams = await searchParams;
+  const archived = String(rawParams.archived ?? "") === "1";
+  const filters: JobFilters = { ...parseJobFilters(rawParams), archived };
   const cookie = (await cookies()).toString();
-  const [result, leadsResult] = await Promise.all([
+  const [result, leadsResult, user] = await Promise.all([
     fetchJobs(filters, cookie, PAGE_SIZE),
     fetchJobLeads(cookie, { query: filters.q || undefined }),
+    getCurrentUser(),
   ]);
+  const isAdmin = Boolean(user?.is_admin);
+  const scope = {
+    q: filters.q || null,
+    companies: [] as string[],
+    cities: filters.cities ? filters.cities.split(",").map((item) => item.trim()).filter(Boolean) : [],
+    job_types: filters.job_types
+      ? filters.job_types.split(",").map((item) => item.trim()).filter(Boolean)
+      : [],
+    source_types: filters.source_types
+      ? filters.source_types.split(",").map((item) => item.trim()).filter(Boolean)
+      : [],
+    recruitment_programs: filters.recruitment_program ? [filters.recruitment_program] : [],
+  };
 
   return (
     <div className="space-y-6">
@@ -43,7 +62,27 @@ export default async function JobsPage({
             这里只收录已读取到官方详情页的岗位；搜索命中的候选链接在页面底部单独列出，核验通过后才会进入岗位库。
           </p>
         </div>
-        <StatusPill tone="neutral">仅收录官方已核验岗位</StatusPill>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusPill tone={archived ? "warning" : "neutral"}>
+            {archived ? "已归档岗位（不参与检索与推荐）" : "仅收录官方已核验岗位"}
+          </StatusPill>
+          {archived ? null : (
+            <JobMaintenancePanel
+              scope={scope}
+              total={result.ok ? result.data.meta.total : 0}
+              isAdmin={isAdmin}
+              archivedView={false}
+            />
+          )}
+          {isAdmin ? (
+            <Link
+              href={archived ? "/jobs" : "/jobs?archived=1"}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-400"
+            >
+              {archived ? "返回在招岗位" : "查看已归档"}
+            </Link>
+          ) : null}
+        </div>
       </header>
 
       <form
@@ -195,7 +234,10 @@ export default async function JobsPage({
           ) : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {result.data.data.map((job) => (
-                <JobCard key={job.id} job={job} />
+                <div key={job.id} className="space-y-2">
+                  <JobCard job={job} />
+                  {archived && isAdmin ? <RestoreJobButton jobId={job.id} /> : null}
+                </div>
               ))}
             </div>
           )}

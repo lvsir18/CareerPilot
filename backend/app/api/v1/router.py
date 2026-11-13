@@ -14,6 +14,7 @@ from app.api.v1 import (
     external_accounts,
     job_imports,
     job_leads,
+    job_maintenance,
     job_sources,
     job_syncs,
     jobs,
@@ -34,6 +35,7 @@ api_v1_router.include_router(dashboard.router)
 api_v1_router.include_router(profile.router)
 api_v1_router.include_router(resumes.router)
 api_v1_router.include_router(jobs.router)
+api_v1_router.include_router(job_maintenance.router)
 api_v1_router.include_router(saved_jobs.router)
 api_v1_router.include_router(matches.router)
 api_v1_router.include_router(agent.router)

@@ -17,6 +17,12 @@ from app.db.models.job import Company, Job, JobSource
 @dataclass(frozen=True)
 class JobQuery:
     q: str | None = None
+    # ``None``/``False`` = active library only; ``True`` = archived only. Archived
+    # jobs leave every list/recommendation but stay reachable by id.
+    archived: bool | None = None
+    # Re-check cooldown: only postings never verified, or verified before this
+    # moment, are selected. Failed checks keep the row eligible.
+    last_verified_before: datetime | None = None
     # Any-of matching for several keywords; ``q`` is a single substring, so
     # passing "大模型 LLM Agent" there never matches anything.
     q_terms: tuple[str, ...] = ()
@@ -97,6 +103,17 @@ class JobRepository:
             conditions.append(Job.first_seen_at >= query.first_seen_after)
         if query.status is not None:
             conditions.append(Job.status == query.status)
+        if query.archived is True:
+            conditions.append(Job.archived_at.is_not(None))
+        else:
+            conditions.append(Job.archived_at.is_(None))
+        if query.last_verified_before is not None:
+            conditions.append(
+                or_(
+                    Job.last_verified_at.is_(None),
+                    Job.last_verified_at < query.last_verified_before,
+                )
+            )
         conditions.extend(query.extra_conditions)
         return conditions
 
@@ -104,6 +121,12 @@ class JobRepository:
     def _ordered(stmt: Select, sort: str) -> Select:
         if sort == "first_seen_at_desc":
             return stmt.order_by(Job.first_seen_at.desc(), Job.id)
+        if sort == "last_checked_asc":
+            # Maintenance sweep: least recently checked first, never-checked at
+            # the very front, so consecutive runs cover different postings.
+            return stmt.order_by(
+                Job.last_checked_at.asc().nullsfirst(), Job.first_seen_at.desc(), Job.id
+            )
         if sort == "title_asc":
             return stmt.order_by(Job.title.asc(), Job.id)
         # Default: real publish dates first; NULL is unknown, never "recent".

@@ -8,6 +8,8 @@ export interface JobFilters {
   recruitment_program: string;
   sort: JobSort;
   page: number;
+  /** Admin-only view of soft-archived postings (`?archived=1`). */
+  archived?: boolean;
 }
 
 export const DEFAULT_JOB_FILTERS: JobFilters = {
@@ -75,6 +77,9 @@ export function buildJobQuery(filters: JobFilters, pageSize = 12): string {
   }
   if (filters.page > 1) {
     params.set("page", String(filters.page));
+  }
+  if (filters.archived) {
+    params.set("archived", "true");
   }
   params.set("page_size", String(pageSize));
   return params.toString();

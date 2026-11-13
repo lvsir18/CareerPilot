@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from app.connectors.errors import ConnectorParseError, UnsafeUrlError
 from app.core.config import Settings
+from app.db.models.enums import JobStatus
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -127,6 +128,32 @@ def assert_public_url(url: str) -> str:
     return url.strip()
 
 
+# Only an explicit closure statement may close a posting. Anything ambiguous
+# (timeout, login wall, redirect to a list, empty body) must stay UNKNOWN: a
+# false "closed" hides a real opening and, worse, archives it.
+_CLOSED_MARKERS = (
+    "职位已下架",
+    "该职位已下架",
+    "岗位已下架",
+    "职位已关闭",
+    "该岗位已关闭",
+    "岗位已关闭",
+    "招聘已结束",
+    "职位已结束",
+    "岗位已下线",
+    "该职位已下线",
+    "已停止招聘",
+    "position is closed",
+    "no longer accepting applications",
+    "job is no longer available",
+)
+_LOGIN_MARKERS = ("请登录", "登录后查看", "sign in to continue", "请先登录")
+
+_DETAIL_PATH_RE = re.compile(
+    r"/(?:detail|job-info|job-details|position|positions|post|job|jobs)/[^/?#]+", re.I
+)
+
+
 @dataclass
 class PageSnapshot:
     url: str
@@ -138,6 +165,34 @@ class PageSnapshot:
     job_type: str | None = None
     location_text: str | None = None
     warnings: list[str] = field(default_factory=list)
+    # open / closed / unknown + the sentence that justified it.
+    status: JobStatus = JobStatus.UNKNOWN
+    status_evidence: str | None = None
+
+
+def detect_posting_status(
+    *,
+    title: str | None,
+    description: str | None,
+    target_url: str,
+    final_url: str,
+) -> tuple[JobStatus, str | None]:
+    """Decide a posting's state from one page read, conservatively."""
+    text = f"{title or ''}\n{description or ''}"
+    for marker in _CLOSED_MARKERS:
+        index = text.lower().find(marker.lower())
+        if index >= 0:
+            excerpt = text[max(0, index - 40) : index + len(marker) + 40].replace("\n", " ")
+            return JobStatus.CLOSED, f"页面明确提示「{marker}」：{excerpt.strip()}"
+    for marker in _LOGIN_MARKERS:
+        if marker.lower() in text.lower():
+            return JobStatus.UNKNOWN, f"页面要求登录（{marker}），无法确认岗位状态"
+    # A detail URL that ends up on a list/home page is a redirect, not a closure.
+    if _DETAIL_PATH_RE.search(target_url) and not _DETAIL_PATH_RE.search(final_url):
+        return JobStatus.UNKNOWN, f"详情页跳转到 {final_url}，无法确认岗位状态"
+    if not description or len(description) < 80:
+        return JobStatus.UNKNOWN, "页面正文为空或过短，无法确认岗位状态"
+    return JobStatus.OPEN, f"读到官方详情正文（{len(description)} 字）"
 
 
 _EXTRACT_JS = Path(__file__).with_name("job_detail_extract.js").read_text(encoding="utf-8")
@@ -229,6 +284,12 @@ class RenderedPageReader:
         if site_name and title and site_name in title:
             title = title.replace(site_name, "").strip(" -|·") or title
 
+        status, status_evidence = detect_posting_status(
+            title=title,
+            description=description,
+            target_url=target,
+            final_url=final_url,
+        )
         return PageSnapshot(
             url=target,
             final_url=final_url,
@@ -239,6 +300,8 @@ class RenderedPageReader:
             job_type=self._guess_job_type(title, metadata),
             site_name=site_name,
             warnings=warnings,
+            status=status,
+            status_evidence=status_evidence,
         )
 
     @staticmethod

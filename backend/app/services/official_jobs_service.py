@@ -178,6 +178,15 @@ class OfficialJobsService:
                             "source_url": raw.source_url,
                             "jd_length": len(raw.description or ""),
                             "requirements": len(raw.requirements),
+                            # Lets a maintenance run report created/updated/
+                            # unchanged instead of calling every hit new.
+                            "outcome": (
+                                "created"
+                                if outcome.created
+                                else "updated"
+                                if outcome.updated
+                                else "unchanged"
+                            ),
                         }
                     )
             summary.append(row)
