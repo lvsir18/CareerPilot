@@ -5,16 +5,29 @@ import { useEffect, useState } from "react";
 
 import {
   changePassword,
+  clearLlmSettings,
+  clearSearchSettings,
   connectQQMailbox,
   deleteMailbox,
   getGmailAuthorize,
+  getLlmSettings,
+  getSearchSettings,
   listMailboxes,
   listMailboxSyncRuns,
+  saveLlmSettings,
+  saveSearchSettings,
   syncMailbox,
+  testLlmConnection,
   testMailbox,
+  testSearchConnection,
   updateMailbox,
 } from "@/lib/client-api";
-import type { MailboxConnection, MailboxSyncRun } from "@/lib/api";
+import type {
+  LlmSettings,
+  MailboxConnection,
+  MailboxSyncRun,
+  SearchSettings,
+} from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -40,6 +53,153 @@ export default function EmailSettingsPage() {
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordNotice, setPasswordNotice] = useState<string | null>(null);
+  const [llm, setLlm] = useState<LlmSettings | null>(null);
+  const [llmProvider, setLlmProvider] = useState<"openai" | "anthropic">("openai");
+  const [llmKey, setLlmKey] = useState("");
+  const [llmBaseUrl, setLlmBaseUrl] = useState("");
+  const [llmModel, setLlmModel] = useState("");
+  const [llmBusy, setLlmBusy] = useState(false);
+  const [llmError, setLlmError] = useState<string | null>(null);
+  const [llmNotice, setLlmNotice] = useState<string | null>(null);
+  const [llmTest, setLlmTest] = useState<string | null>(null);
+  const [search, setSearch] = useState<SearchSettings | null>(null);
+  const [searchKey, setSearchKey] = useState("");
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
+  const [searchTest, setSearchTest] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadLlm();
+  }, []);
+
+  async function loadLlm() {
+    const result = await getLlmSettings();
+    if (!result.ok) {
+      return;
+    }
+    setLlm(result.data);
+    if (result.data.provider) {
+      setLlmProvider(result.data.provider);
+    }
+    setLlmBaseUrl(result.data.base_url ?? "");
+    setLlmModel(result.data.model ?? "");
+  }
+
+  async function handleSaveLlm() {
+    setLlmError(null);
+    setLlmNotice(null);
+    if (!llm?.key_set && !llmKey.trim()) {
+      setLlmError("首次配置需要填写 API Key");
+      return;
+    }
+    setLlmBusy(true);
+    const result = await saveLlmSettings({
+      provider: llmProvider,
+      api_key: llmKey.trim() || undefined,
+      base_url: llmBaseUrl.trim() || null,
+      model: llmModel.trim() || null,
+    });
+    setLlmBusy(false);
+    if (!result.ok) {
+      setLlmError(result.error.message);
+      return;
+    }
+    setLlm(result.data);
+    setLlmKey("");
+    setLlmNotice("已保存，仅对你自己的 Agent 任务生效。");
+  }
+
+  async function handleClearLlm() {
+    setLlmBusy(true);
+    setLlmError(null);
+    setLlmNotice(null);
+    const result = await clearLlmSettings();
+    setLlmBusy(false);
+    if (!result.ok) {
+      setLlmError(result.error.message);
+      return;
+    }
+    await loadLlm();
+    setLlmKey("");
+    setLlmNotice("已清除，将使用服务端默认 Key。");
+  }
+
+  useEffect(() => {
+    void loadSearch();
+  }, []);
+
+  async function loadSearch() {
+    const result = await getSearchSettings();
+    if (result.ok) {
+      setSearch(result.data);
+    }
+  }
+
+  async function handleSaveSearch() {
+    setSearchError(null);
+    setSearchNotice(null);
+    if (!search?.key_set && !searchKey.trim()) {
+      setSearchError("首次配置需要填写 Tavily API Key");
+      return;
+    }
+    setSearchBusy(true);
+    const result = await saveSearchSettings(searchKey.trim());
+    setSearchBusy(false);
+    if (!result.ok) {
+      setSearchError(result.error.message);
+      return;
+    }
+    setSearch(result.data);
+    setSearchKey("");
+    setSearchNotice("已保存，仅对你自己的实时检索生效。");
+  }
+
+  async function handleClearSearch() {
+    setSearchBusy(true);
+    setSearchError(null);
+    setSearchNotice(null);
+    const result = await clearSearchSettings();
+    setSearchBusy(false);
+    if (!result.ok) {
+      setSearchError(result.error.message);
+      return;
+    }
+    await loadSearch();
+    setSearchKey("");
+    setSearchNotice("已清除，将不再使用你的 Key。");
+  }
+
+  async function handleTestLlm() {
+    setLlmBusy(true);
+    setLlmError(null);
+    setLlmTest(null);
+    const result = await testLlmConnection({
+      provider: llmProvider,
+      api_key: llmKey.trim() || undefined,
+      base_url: llmBaseUrl.trim() || null,
+      model: llmModel.trim() || null,
+    });
+    setLlmBusy(false);
+    if (!result.ok) {
+      setLlmError(result.error.message);
+      return;
+    }
+    setLlmTest(`连接成功 · ${result.data.latency_ms}ms · ${result.data.target}`);
+  }
+
+  async function handleTestSearch() {
+    setSearchBusy(true);
+    setSearchError(null);
+    setSearchTest(null);
+    const result = await testSearchConnection(searchKey.trim() || undefined);
+    setSearchBusy(false);
+    if (!result.ok) {
+      setSearchError(result.error.message);
+      return;
+    }
+    setSearchTest(`连接成功 · ${result.data.latency_ms}ms · ${result.data.target}`);
+  }
 
   async function handleChangePassword() {
     setPasswordError(null);
@@ -357,6 +517,181 @@ export default function EmailSettingsPage() {
           {passwordNotice ? (
             <span className="text-xs text-emerald-700">{passwordNotice}</span>
           ) : null}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">模型 API</h2>
+          <span
+            className={
+              llm?.configured
+                ? "rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                : "rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+            }
+          >
+            {llm?.configured
+              ? `使用自己的 Key · ${llm.masked_key ?? "已保存"}`
+              : llm?.server_default_available
+                ? "当前使用服务端默认 Key"
+                : "尚未配置模型"}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          不配置时使用服务端默认 Key；配置后只影响你自己的 Agent 任务。Key 加密存储、不会回显，
+          也不会出现在日志里。支持 OpenAI 兼容接口（可填自建/第三方网关）与 Anthropic 官方接口。
+        </p>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <label className="text-xs text-slate-600">
+            提供方
+            <select
+              value={llmProvider}
+              onChange={(event) => setLlmProvider(event.target.value as "openai" | "anthropic")}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="openai">OpenAI 兼容（OpenAI / DeepSeek / 自建网关）</option>
+              <option value="anthropic">Anthropic（Claude 官方）</option>
+            </select>
+          </label>
+          <label className="text-xs text-slate-600">
+            API Key
+            <input
+              type="password"
+              value={llmKey}
+              onChange={(event) => setLlmKey(event.target.value)}
+              placeholder={llm?.key_set ? "已保存，留空表示不修改" : "粘贴你的 API Key"}
+              autoComplete="off"
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="text-xs text-slate-600">
+            Base URL（可选）
+            <input
+              value={llmBaseUrl}
+              onChange={(event) => setLlmBaseUrl(event.target.value)}
+              placeholder={
+                llmProvider === "openai"
+                  ? "https://api.openai.com/v1 或你的兼容网关"
+                  : "默认使用 Anthropic 官方地址"
+              }
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="text-xs text-slate-600">
+            模型（可选）
+            <input
+              value={llmModel}
+              onChange={(event) => setLlmModel(event.target.value)}
+              placeholder={
+                llmProvider === "openai" ? "如 gpt-4o-mini / deepseek-chat" : "如 claude-3-5-sonnet-latest"
+              }
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void handleSaveLlm()}
+            disabled={llmBusy}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+          >
+            {llmBusy ? "保存中…" : "保存"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleTestLlm()}
+            disabled={llmBusy}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 disabled:opacity-40"
+          >
+            测试连接
+          </button>
+          {llm?.configured ? (
+            <button
+              type="button"
+              onClick={() => void handleClearLlm()}
+              disabled={llmBusy}
+              className="text-xs text-rose-600 hover:underline disabled:opacity-40"
+            >
+              清除，改用服务端默认
+            </button>
+          ) : null}
+          {llmError ? <span className="text-xs text-rose-700">{llmError}</span> : null}
+          {llmNotice ? <span className="text-xs text-emerald-700">{llmNotice}</span> : null}
+          {llmTest ? <span className="text-xs text-emerald-700">{llmTest}</span> : null}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">搜索 API（Tavily）</h2>
+          <span
+            className={
+              search?.configured
+                ? "rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                : "rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+            }
+          >
+            {search?.configured
+              ? `使用自己的 Key · ${search.masked_key ?? "已保存"}`
+              : search?.server_default_available && !search.server_default_admins_only
+                ? "当前使用服务端默认 Key"
+                : search?.server_default_available
+                  ? "未配置（服务端 Key 仅限管理员）"
+                  : "未配置"}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          实时检索会消耗 Tavily credits。未配置时：管理员沿用服务端默认 Key，其他账号只查岗位库、
+          不发实时检索请求，避免共用部署者的额度。Key 加密存储、只显示掩码。
+        </p>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <label className="text-xs text-slate-600">
+            Tavily API Key
+            <input
+              type="password"
+              value={searchKey}
+              onChange={(event) => setSearchKey(event.target.value)}
+              placeholder={search?.key_set ? "已保存，留空表示不修改" : "tvly-..."}
+              autoComplete="off"
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void handleSaveSearch()}
+            disabled={searchBusy}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+          >
+            {searchBusy ? "保存中…" : "保存"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleTestSearch()}
+            disabled={searchBusy}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 disabled:opacity-40"
+          >
+            测试连接
+          </button>
+          {search?.configured ? (
+            <button
+              type="button"
+              onClick={() => void handleClearSearch()}
+              disabled={searchBusy}
+              className="text-xs text-rose-600 hover:underline disabled:opacity-40"
+            >
+              清除我的 Key
+            </button>
+          ) : null}
+          {searchError ? <span className="text-xs text-rose-700">{searchError}</span> : null}
+          {searchNotice ? <span className="text-xs text-emerald-700">{searchNotice}</span> : null}
+          {searchTest ? <span className="text-xs text-emerald-700">{searchTest}</span> : null}
         </div>
       </section>
     </div>

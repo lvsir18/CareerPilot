@@ -110,6 +110,35 @@ export interface PrunePreview {
   truncated: boolean;
 }
 
+export interface LlmSettings {
+  configured: boolean;
+  provider: "openai" | "anthropic" | null;
+  base_url: string | null;
+  model: string | null;
+  key_set: boolean;
+  /** `sk-ab…9f2c` — never the real key. */
+  masked_key: string | null;
+  server_default_available: boolean;
+}
+
+export interface SearchSettings {
+  configured: boolean;
+  provider: string | null;
+  key_set: boolean;
+  masked_key: string | null;
+  server_default_available: boolean;
+  server_default_admins_only: boolean;
+  provider_enabled: boolean;
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  provider: string;
+  target: string;
+  latency_ms: number;
+  detail?: string | null;
+}
+
 /** Non-terminal background work owned by the current user. */
 export interface ActivitySnapshot {
   job_maintenance: {

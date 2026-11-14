@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.db.models.user import User
 from app.repositories.jobs import JobQuery
 from app.schemas.jobs import job_to_list_item
 from app.schemas.leads import (
@@ -27,6 +28,10 @@ from app.search.service import SearchService
 from app.search.taxonomy import classify_job_family, is_known_family, job_family_matches
 from app.services.job_lead_service import JobLeadService
 from app.services.job_service import JobService
+from app.services.user_search_service import (
+    UserSearchSettingsService,
+    shares_server_search_key,
+)
 
 DISCOVERY_SORTS = ("relevance", "newest", "published")
 
@@ -43,7 +48,25 @@ class JobDiscoveryService:
         self._session = session
         self._settings = settings
         self._search = search_service or SearchService(settings)
+        # Injected searchers (tests, batch jobs) must keep being used as-is.
+        self._injected_search = search_service
         self._leads = lead_service or JobLeadService(session, settings)
+
+    def _search_for(self, user_id: UUID) -> tuple[SearchService, bool]:
+        """Per-account search key, then the shared key for admins only.
+
+        Returns ``(service, needs_close)``; a temporary service carries the
+        account's own Tavily key or has the provider disabled.
+        """
+        if self._injected_search is not None:
+            return self._injected_search, False
+        own = UserSearchSettingsService(self._session, self._settings).resolve(user_id)
+        if own:
+            return SearchService(self._settings, tavily_api_key=own), True
+        user = self._session.get(User, user_id)
+        if shares_server_search_key(self._settings, user):
+            return self._search, False
+        return SearchService(self._settings, use_server_key=False), True
 
     def _resolve_companies(
         self, companies: list[str] | None, company: str | None
@@ -141,15 +164,20 @@ class JobDiscoveryService:
                 warnings=["岗位库已有命中，本轮跳过实时检索"],
             )
         else:
-            outcome = self._search.search(
-                query or "",
-                company_keys=selected,
-                city=city,
-                job_type=job_type,
-                job_family=job_family,
-                limit=search_limit,
-                user_id=user_id,
-            )
+            searcher, temporary = self._search_for(user_id)
+            try:
+                outcome = searcher.search(
+                    query or "",
+                    company_keys=selected,
+                    city=city,
+                    job_type=job_type,
+                    job_family=job_family,
+                    limit=search_limit,
+                    user_id=user_id,
+                )
+            finally:
+                if temporary:
+                    searcher.close()
         warnings = list(outcome.warnings)
         if unknown_companies:
             warnings.append(f"已忽略无法识别的企业：{'、'.join(unknown_companies)}")

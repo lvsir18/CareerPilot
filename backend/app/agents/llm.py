@@ -14,6 +14,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai import ChatOpenAI
 
 from app.core.config import Settings
+from app.services.user_llm_service import LlmConfig
 
 
 class LLMNotConfiguredError(RuntimeError):
@@ -34,6 +35,53 @@ def build_chat_model(settings: Settings) -> BaseChatModel | None:
         timeout=60,
         max_retries=1,
     )
+
+
+def build_user_chat_model(config: LlmConfig, settings: Settings) -> BaseChatModel:
+    """Build a model from one account's own provider credentials."""
+    if config.provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+
+        extra: dict[str, Any] = {}
+        if config.base_url:
+            extra["base_url"] = config.base_url
+        return ChatAnthropic(
+            model=config.model,
+            api_key=config.api_key,
+            temperature=settings.llm_temperature,
+            timeout=60,
+            max_retries=1,
+            **extra,
+        )
+    return ChatOpenAI(
+        # An OpenAI-compatible gateway (DeepSeek/Qwen) may set its own URL; the
+        # user's key alone is not enough without the matching endpoint.
+        base_url=config.base_url or settings.llm_base_url,
+        api_key=config.api_key,
+        model=config.model,
+        temperature=settings.llm_temperature,
+        timeout=60,
+        max_retries=1,
+    )
+
+
+def _is_admin(settings: Settings, user: Any) -> bool:
+    email = getattr(user, "email", "") or ""
+    return email.strip().lower() in settings.admin_email_set
+
+
+def resolve_chat_model(session: Any, settings: Settings, user: Any) -> BaseChatModel | None:
+    """Per-account key first, then the owner's shared key (admins only)."""
+    from app.services.user_llm_service import UserLlmSettingsService
+
+    config = UserLlmSettingsService(session, settings).resolve(user.id)
+    if config is not None:
+        return build_user_chat_model(config, settings)
+    if settings.shared_llm_key_admins_only and not _is_admin(settings, user):
+        # A shared key is the deployment owner's quota; other accounts must
+        # configure their own instead of silently spending it.
+        return None
+    return build_chat_model(settings)
 
 
 def require_chat_model(settings: Settings) -> BaseChatModel:

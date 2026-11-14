@@ -14,6 +14,7 @@ SameSite=Lax and CORS are defence-in-depth, not the primary control.
 
 from __future__ import annotations
 
+import ipaddress
 import secrets
 from urllib.parse import urlsplit
 
@@ -77,6 +78,25 @@ def issue_csrf_token(response: Response, settings: Settings) -> str:
     return token
 
 
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")  # Tailscale uses this range
+
+
+def _is_lan_origin(origin: str) -> bool:
+    """True for http(s) origins whose host is a private IP literal.
+
+    Only IP literals qualify: a public domain still has to be listed explicitly,
+    so opening the app on a LAN address never weakens the check for real sites.
+    """
+    parsed = urlsplit(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        return False
+    return address.is_private or address in _CGNAT
+
+
 def verify_trusted_origin(request: Request, settings: Settings) -> None:
     if request.method in SAFE_METHODS:
         return
@@ -91,7 +111,9 @@ def verify_trusted_origin(request: Request, settings: Settings) -> None:
             message="请求缺少可信来源信息，已拒绝",
             status_code=403,
         )
-    if origin not in settings.effective_csrf_origins:
+    if origin not in settings.effective_csrf_origins and not (
+        settings.allow_lan_origins and _is_lan_origin(origin)
+    ):
         logger.warning("csrf_origin_rejected", extra={"origin": origin})
         raise AppError(
             code="CSRF_ORIGIN_INVALID",

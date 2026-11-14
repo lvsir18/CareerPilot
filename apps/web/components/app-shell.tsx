@@ -10,6 +10,7 @@ import {
   Compass,
   FilePlus2,
   FileText,
+  Home,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -35,6 +36,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  { label: "首页", href: "/home", icon: <Home className="size-4" aria-hidden /> },
   { label: "概览", href: "/dashboard", icon: <LayoutDashboard className="size-4" aria-hidden /> },
   { label: "岗位库", href: "/jobs", icon: <Briefcase className="size-4" aria-hidden /> },
   {
@@ -202,9 +204,14 @@ export function AppShell({
     <div className={cn("bg-slate-50 lg:flex", isAgentWorkspace ? "h-dvh overflow-hidden" : "min-h-screen")}>
       <aside className="fixed inset-y-0 hidden w-64 flex-col border-r border-slate-800 bg-slate-950 lg:flex">
         <div className="flex items-center gap-3 px-5 py-5">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 text-sm font-bold text-white shadow-lg shadow-sky-500/20">
-            CP
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element -- local SVG logo */}
+          <img
+            src="/careerpilot-avatar.svg"
+            alt="CareerPilot"
+            width={36}
+            height={36}
+            className="size-9 rounded-xl shadow-lg shadow-sky-500/20"
+          />
           <div>
             <p className="text-sm font-semibold text-white">CareerPilot</p>
             <p className="text-xs text-slate-400">智能求职 Agent</p>
@@ -261,9 +268,14 @@ export function AppShell({
           >
             <div className="flex items-center justify-between px-5 py-4">
               <div className="flex items-center gap-3">
-                <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 text-sm font-bold text-white">
-                  CP
-                </span>
+                {/* eslint-disable-next-line @next/next/no-img-element -- local SVG logo */}
+                <img
+                  src="/careerpilot-avatar.svg"
+                  alt="CareerPilot"
+                  width={36}
+                  height={36}
+                  className="size-9 rounded-xl"
+                />
                 <div>
                   <p className="text-sm font-semibold text-white">CareerPilot</p>
                   <p className="text-xs text-slate-400">智能求职 Agent</p>
@@ -310,13 +322,23 @@ export function AppShell({
               >
                 <Menu className="size-4" aria-hidden />
               </button>
-              <span className="hidden size-7 items-center justify-center rounded-lg bg-gradient-to-br from-sky-400 to-indigo-500 text-[11px] font-bold text-white sm:flex lg:hidden">
-                CP
-              </span>
-              <span className="hidden text-slate-400 sm:inline">CareerPilot</span>
+              {/* eslint-disable-next-line @next/next/no-img-element -- local SVG logo */}
+              <img
+                src="/careerpilot-avatar.svg"
+                alt="CareerPilot"
+                width={28}
+                height={28}
+                className="hidden size-7 rounded-lg sm:block lg:hidden"
+              />
+              <Link
+                href="/home"
+                className="hidden text-slate-400 transition-colors hover:text-slate-700 sm:inline"
+              >
+                CareerPilot
+              </Link>
               <span className="hidden text-slate-300 sm:inline">/</span>
               <span className="truncate font-medium text-slate-900">
-                {current?.label ?? "概览"}
+                {current?.label ?? "首页"}
               </span>
             </div>
             <div className="flex items-center gap-3">

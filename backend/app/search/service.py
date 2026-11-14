@@ -57,6 +57,8 @@ class SearchService:
         provider: SearchProvider | None = None,
         providers: list[SearchProvider] | None = None,
         official_provider: Any | None = None,
+        tavily_api_key: str | None = None,
+        use_server_key: bool = True,
     ) -> None:
         self._settings = settings
         self._redis = redis_client or get_redis()
@@ -65,7 +67,13 @@ class SearchService:
         elif provider is not None:
             self._providers = [provider]
         else:
-            built = build_search_provider(settings)
+            if tavily_api_key:
+                key_arg: str | None = tavily_api_key
+            elif use_server_key:
+                key_arg = None
+            else:
+                key_arg = ""  # explicitly disabled
+            built = build_search_provider(settings, api_key=key_arg)
             self._providers = [built] if built is not None else []
         self._official = (
             official_provider

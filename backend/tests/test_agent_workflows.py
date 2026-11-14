@@ -148,7 +148,10 @@ def test_hitl_resume_worker_respects_decision_and_confirmation(
         yield saver
 
     monkeypatch.setattr("app.agents.service.checkpoint_saver", memory_checkpoint)
-    monkeypatch.setattr("app.agents.service.build_chat_model", lambda settings: model)
+    monkeypatch.setattr(
+        "app.agents.service.resolve_chat_model",
+        lambda session, settings, user: model,
+    )
     monkeypatch.setattr(
         "app.agents.service.build_specialized_agents", lambda ctx, model: _agents(calls)
     )

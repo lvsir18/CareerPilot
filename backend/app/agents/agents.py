@@ -34,6 +34,11 @@ JOB_MATCH_PROMPT = """你是岗位匹配助手。职责：
 
 PROFILE_PROMPT = """你是个人画像助手（只读）。职责：
 - 调用 get_profile_summary 读取已确认画像。
+- 画像包含 skills / education / experiences / projects / preferences 五部分。
+  回答"我的项目/实习经历是否匹配某岗位"时，引用 projects 与 experiences 里的
+  具体项目名、时间、描述和技能做分析，不要断言"画像里没有项目正文"。
+- 判断垂直度时基于项目内容本身（技术栈、业务场景、成果指标），并指出缺口；
+  如果某个字段确实为空，再说明该字段为空。
 - 不修改画像，不编造技能/经历。
 - 若画像未确认（confirmed=false），明确提示用户前往 /profile 确认。"""
 

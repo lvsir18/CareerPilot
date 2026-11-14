@@ -281,9 +281,7 @@ class JobMaintenanceService:
         if recheck:
             cooldown_hours = self._cooldown_hours(options)
             cutoff = (
-                datetime.now(UTC) - timedelta(hours=cooldown_hours)
-                if cooldown_hours > 0
-                else None
+                datetime.now(UTC) - timedelta(hours=cooldown_hours) if cooldown_hours > 0 else None
             )
             query = _scope_query(
                 scope,

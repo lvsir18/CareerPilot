@@ -27,7 +27,10 @@ import {
   type MailboxDeleteResult,
   type JobLead,
   type JobLeadDetail,
+  type LlmSettings,
   type MaintenanceRun,
+  type ConnectionTestResult,
+  type SearchSettings,
   type MaintenanceScope,
   type PrunePreview,
   type MailboxConnection,
@@ -48,15 +51,15 @@ import {
 const CLIENT_TIMEOUT_MS = 6000;
 
 function clientBaseUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:8000"
-  );
+  // Same-origin by default: next.config rewrites /api/v1 to the API container,
+  // so the app also works when opened from a phone via the LAN IP.
+  return process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? "";
 }
 
 interface RequestOptions {
   /** Per-request override; long-running agent runs need minutes. */
   timeoutMs?: number;
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
 }
 
@@ -181,6 +184,59 @@ export function resetPassword(
 
 export function getActivity(): Promise<ApiResult<ActivitySnapshot>> {
   return request<ActivitySnapshot>("/api/v1/system/activity");
+}
+
+export function getLlmSettings(): Promise<ApiResult<LlmSettings>> {
+  return request<LlmSettings>("/api/v1/settings/llm");
+}
+
+export function saveLlmSettings(payload: {
+  provider: "openai" | "anthropic";
+  api_key?: string;
+  base_url?: string | null;
+  model?: string | null;
+}): Promise<ApiResult<LlmSettings>> {
+  return request<LlmSettings>("/api/v1/settings/llm", { method: "PUT", body: payload });
+}
+
+export function clearLlmSettings(): Promise<ApiResult<undefined>> {
+  return request<undefined>("/api/v1/settings/llm", { method: "DELETE" });
+}
+
+export function testLlmConnection(payload: {
+  provider: "openai" | "anthropic";
+  api_key?: string;
+  base_url?: string | null;
+  model?: string | null;
+}): Promise<ApiResult<ConnectionTestResult>> {
+  return request<ConnectionTestResult>("/api/v1/settings/llm/test", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function getSearchSettings(): Promise<ApiResult<SearchSettings>> {
+  return request<SearchSettings>("/api/v1/settings/search");
+}
+
+export function saveSearchSettings(apiKey: string): Promise<ApiResult<SearchSettings>> {
+  return request<SearchSettings>("/api/v1/settings/search", {
+    method: "PUT",
+    body: { api_key: apiKey },
+  });
+}
+
+export function clearSearchSettings(): Promise<ApiResult<undefined>> {
+  return request<undefined>("/api/v1/settings/search", { method: "DELETE" });
+}
+
+export function testSearchConnection(
+  apiKey?: string,
+): Promise<ApiResult<ConnectionTestResult>> {
+  return request<ConnectionTestResult>("/api/v1/settings/search/test", {
+    method: "POST",
+    body: { api_key: apiKey ?? null },
+  });
 }
 
 export function startJobMaintenance(payload: {

@@ -40,8 +40,15 @@ class TavilySearchProvider:
     available = True
     cost_note = "按 Tavily 当前 plan 的 credits 计费；未配置 key 时不发请求"
 
-    def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
-        self._key = settings.tavily_api_key
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        # A per-account key wins; ``""`` explicitly disables the provider so a
+        # non-admin without their own key never spends the owner's quota.
+        self._key = settings.tavily_api_key if api_key is None else (api_key or None)
         self._depth = settings.tavily_search_depth
         self._max_results = settings.tavily_max_results
         self._client = client or httpx.Client(
@@ -205,10 +212,19 @@ def _baidu_job_type(recruit_type: str, project: str) -> str | None:
     return None
 
 
-def build_search_provider(settings: Settings, client: httpx.Client | None = None) -> Any:
-    """Build Tavily only when explicitly selected; it still needs a key."""
+def build_search_provider(
+    settings: Settings,
+    client: httpx.Client | None = None,
+    *,
+    api_key: str | None = None,
+) -> Any:
+    """Build Tavily only when explicitly selected; it still needs a key.
+
+    ``api_key=""`` disables the provider (an account without its own key must not
+    silently spend the deployment owner's quota).
+    """
     if settings.search_provider == "tavily":
-        return TavilySearchProvider(settings, client=client)
+        return TavilySearchProvider(settings, client=client, api_key=api_key)
     return None
 
 

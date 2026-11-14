@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.agents import build_specialized_agents
 from app.agents.checkpoint import checkpoint_saver
-from app.agents.llm import LLMNotConfiguredError, build_chat_model
+from app.agents.llm import LLMNotConfiguredError, resolve_chat_model
 from app.agents.runtime import (
     AGENT_STATUS_RUNNING,
     AGENT_STATUS_WAITING,
@@ -86,10 +86,13 @@ class AgentService:
         self._settings = settings
 
     def _compile(self, user: User, saver, on_event=None, cancel_check=None, resume_approval=None):
-        model = build_chat_model(self._settings)
+        # Each account may run on its own provider key; the server key is only a
+        # fallback for accounts that have not configured one.
+        model = resolve_chat_model(self._session, self._settings, user)
         if model is None:
             raise LLMNotConfiguredError(
-                "未配置 LLM（LLM_BASE_URL / LLM_API_KEY / LLM_MODEL），无法执行 Agent 任务"
+                "未配置模型：请到「设置 → 模型 API」填写自己的 API Key，"
+                "或让管理员配置服务端默认 Key"
             )
         ctx = RuntimeContext(
             user_id=user.id,

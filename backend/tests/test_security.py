@@ -318,3 +318,74 @@ def test_successful_login_resets_account_counter(
             json={"email": "reset@example.com", "password": "wrong-password"},
         )
         assert again.status_code in {401, 429}
+
+
+def test_lan_origin_rejected_when_the_switch_is_off(
+    plain_client: TestClient, settings: Settings, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "allow_lan_origins", False)
+
+    response = plain_client.post(
+        "/api/v1/auth/login",
+        json={"email": "lan-off@example.com", "password": "whatever-123"},
+        headers={"Origin": "http://192.168.1.10:3000"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "CSRF_ORIGIN_INVALID"
+
+
+def test_lan_origin_is_trusted_when_enabled(
+    plain_client: TestClient, settings: Settings, monkeypatch
+) -> None:
+    """A phone opening the app on a LAN IP must get past the origin check."""
+    monkeypatch.setattr(settings, "allow_lan_origins", True)
+
+    response = plain_client.post(
+        "/api/v1/auth/login",
+        json={"email": "lan-on@example.com", "password": "whatever-123"},
+        headers={"Origin": "http://192.168.1.10:3000"},
+    )
+
+    # Origin accepted; the account simply does not exist.
+    assert response.status_code == 401
+
+
+def test_tailscale_origin_is_trusted_when_enabled(
+    plain_client: TestClient, settings: Settings, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "allow_lan_origins", True)
+
+    response = plain_client.post(
+        "/api/v1/auth/login",
+        json={"email": "lan-ts@example.com", "password": "whatever-123"},
+        headers={"Origin": "http://100.101.102.103:3000"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_public_domain_is_still_rejected_when_lan_is_enabled(
+    plain_client: TestClient, settings: Settings, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "allow_lan_origins", True)
+
+    response = plain_client.post(
+        "/api/v1/auth/login",
+        json={"email": "lan-evil@example.com", "password": "whatever-123"},
+        headers={"Origin": "https://evil.example.com"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "CSRF_ORIGIN_INVALID"
+
+
+def test_lan_origin_helper_only_accepts_private_ip_literals() -> None:
+    from app.security.csrf import _is_lan_origin
+
+    assert _is_lan_origin("http://192.168.1.10:3000")
+    assert _is_lan_origin("http://10.0.0.8:3000")
+    assert _is_lan_origin("http://100.101.102.103:3000")  # Tailscale CGNAT
+    assert not _is_lan_origin("https://evil.example.com")
+    assert not _is_lan_origin("http://8.8.8.8:3000")
+    assert not _is_lan_origin("ftp://192.168.1.1:3000")

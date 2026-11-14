@@ -24,6 +24,8 @@ from app.api.v1 import (
     profile,
     resumes,
     saved_jobs,
+    settings_llm,
+    settings_search,
     system,
     tencent,
 )
@@ -37,6 +39,8 @@ api_v1_router.include_router(resumes.router)
 api_v1_router.include_router(jobs.router)
 api_v1_router.include_router(job_maintenance.router)
 api_v1_router.include_router(saved_jobs.router)
+api_v1_router.include_router(settings_llm.router)
+api_v1_router.include_router(settings_search.router)
 api_v1_router.include_router(matches.router)
 api_v1_router.include_router(agent.router)
 api_v1_router.include_router(agent_runs.router)

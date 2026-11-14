@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     csrf_cookie_name: str = "careerpilot_csrf"
     csrf_header_name: str = "X-CSRF-Token"
     csrf_trusted_origins: list[str] = Field(default_factory=list)
+    # Allow http(s) origins whose host is a private IP (LAN / Tailscale). A phone
+    # opening http://192.168.1.10:3000 otherwise fails the origin check, and the
+    # address changes with every network. Public domains must still be listed.
+    allow_lan_origins: bool = False
 
     # Login/register rate limiting (Redis). Fail-open with a warning when Redis
     # is unavailable so a cache outage cannot take down authentication.
@@ -78,6 +82,10 @@ class Settings(BaseSettings):
     # Baidu official list page and manual imports. The key is env-only.
     search_provider: Literal["none", "tavily"] = "none"
     tavily_api_key: str | None = None
+    # A shared key is the deployment owner's quota. Keep it to admins by default
+    # so other accounts on the LAN configure their own instead.
+    shared_llm_key_admins_only: bool = True
+    shared_search_key_admins_only: bool = True
     tavily_search_depth: Literal["basic", "advanced"] = "basic"
     tavily_max_results: int = Field(default=10, ge=1, le=20)
     tavily_max_queries_per_request: int = Field(default=20, ge=1, le=20)

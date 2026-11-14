@@ -323,6 +323,27 @@ def build_profile_tools(ctx: RuntimeContext) -> list:
                 }
                 for e in read.education
             ],
+            # Resumes carry the project and internship detail that "is my
+            # experience a fit" questions depend on. Without these the agent
+            # told users the profile had no project text at all.
+            "experiences": [
+                {
+                    "kind": item.kind,
+                    "title": item.title,
+                    "time_range": item.time_range,
+                    "skills": item.skills,
+                    "description": (item.description or "")[:1200] or None,
+                }
+                for item in read.experiences[:10]
+            ],
+            "projects": [
+                {
+                    "title": item.title,
+                    "time_range": item.time_range,
+                    "summary": (item.summary or "")[:1200] or None,
+                }
+                for item in read.projects[:10]
+            ],
             "preferences": {
                 "target_roles": read.preferences.target_roles,
                 "cities": read.preferences.cities,

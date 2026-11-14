@@ -86,3 +86,56 @@ def test_safe_tool_emits_progress_events(settings: Settings) -> None:
     assert [event[0] for event in events] == ["tool.started", "tool.completed"]
     assert events[0][1] == {"tool": "demo_tool"}
     assert events[1][1] == {"tool": "demo_tool", "ok": False}
+
+
+def test_profile_tool_exposes_projects_and_experiences(
+    db_session: Session, settings: Settings
+) -> None:
+    """「我的项目够不够垂直」需要项目正文，不能只说画像里有技能和学历。"""
+    from app.agents.tools import build_profile_tools
+    from app.db.models.user import User
+    from app.schemas.profile import ExperienceItem, ProfileUpdate, ProjectItem
+    from app.services.profile_service import ProfileService
+
+    user = User(email="profile-tool@example.com", password_hash="x")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    ProfileService(db_session).update(
+        user,
+        ProfileUpdate(
+            headline="LLM / Agent 方向",
+            skills=["Python", "PyTorch"],
+            projects=[
+                ProjectItem(
+                    title="LLM Agent 评测平台",
+                    time_range="2025.03 - 2025.09",
+                    summary="负责工具调用编排与轨迹回放，把人工评测成本降低 40%。",
+                )
+            ],
+            experiences=[
+                ExperienceItem(
+                    kind="internship",
+                    title="字节跳动 · 算法实习生",
+                    time_range="2025.06 - 2025.09",
+                    description="参与 RAG 检索链路优化，召回率提升 6 个百分点。",
+                    skills=["PyTorch"],
+                )
+            ],
+        ),
+    )
+
+    ctx = RuntimeContext(
+        user_id=user.id,
+        user=user,
+        session=db_session,
+        settings=settings,
+    )
+    tools = {tool.name: tool for tool in build_profile_tools(ctx)}
+    data = tools["get_profile_summary"].invoke({})
+
+    assert data["projects"][0]["title"] == "LLM Agent 评测平台"
+    assert "轨迹回放" in (data["projects"][0]["summary"] or "")
+    assert data["experiences"][0]["title"] == "字节跳动 · 算法实习生"
+    assert data["experiences"][0]["skills"] == ["PyTorch"]
+    assert data["skills"] == ["Python", "PyTorch"]

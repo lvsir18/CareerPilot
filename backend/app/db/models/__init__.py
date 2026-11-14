@@ -34,6 +34,8 @@ from app.db.models.resume import Resume
 from app.db.models.saved_job import SavedJob
 from app.db.models.sync_run import SyncRun
 from app.db.models.user import User, UserSession
+from app.db.models.user_llm import UserLlmSettings
+from app.db.models.user_search import UserSearchSettings
 
 __all__ = [
     "AgentRun",
@@ -71,6 +73,8 @@ __all__ = [
     "SyncRun",
     "SyncStatus",
     "User",
+    "UserLlmSettings",
+    "UserSearchSettings",
     "UserSession",
     "VerificationStatus",
 ]

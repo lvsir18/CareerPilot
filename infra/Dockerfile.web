@@ -37,6 +37,9 @@ RUN addgroup --system --gid 1001 nodejs \
 # Next.js standalone output already contains the minimal node_modules.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# standalone output does not include public/ automatically; without this every
+# static asset (logo, icons) silently 404s in production.
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
 EXPOSE 3000
