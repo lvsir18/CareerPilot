@@ -23,7 +23,9 @@ class JobMaintenanceRun(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "job_maintenance_runs"
     __table_args__ = (
-        CheckConstraint("kind IN ('refresh', 'discover', 'prune')", name="kind_valid"),
+        CheckConstraint(
+            "kind IN ('refresh', 'discover', 'prune', 'verify_leads')", name="kind_valid"
+        ),
         CheckConstraint(
             "status IN ('queued', 'running', 'success', 'partial', 'failed', 'cancelled')",
             name="status_valid",

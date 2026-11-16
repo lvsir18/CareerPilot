@@ -19,6 +19,7 @@ from app.core.errors import AppError
 from app.core.text import normalize_company_name
 from app.db.models.enums import (
     JobSourceMethod,
+    JobStatus,
     LeadVerificationStatus,
     VerificationStatus,
 )
@@ -359,22 +360,12 @@ class JobLeadService:
         )
         return [evidence_to_read(row) for row in rows]
 
-    def verify(self, lead_id: UUID, user_id: UUID) -> tuple[JobLead, UpsertOutcome]:
-        lead = self.get_for_user(lead_id, user_id)
-        if (
-            lead.job_id is not None
-            and lead.verification_status == LeadVerificationStatus.VERIFIED_OFFICIAL
-        ):
-            raise AppError(
-                code="JOB_LEAD_ALREADY_VERIFIED",
-                message="该候选岗位已完成官方核验",
-                status_code=409,
-            )
+    def _check_verify_rate_limit(self, user_id: UUID, cost: int = 1) -> None:
         try:
             redis = get_redis()
             key = f"cp:lead-verify:{user_id}:{int(time.time() // 60)}"
             pipeline = redis.pipeline()
-            pipeline.incr(key)
+            pipeline.incrby(key, max(1, cost))
             pipeline.expire(key, 90)
             count, _ = pipeline.execute()
             if int(count) > self._settings.lead_verify_rate_limit_per_minute:
@@ -389,6 +380,77 @@ class JobLeadService:
         except Exception:
             # Verification remains usable if Redis is unavailable.
             pass
+
+    def verify(self, lead_id: UUID, user_id: UUID) -> tuple[JobLead, UpsertOutcome]:
+        self._check_verify_rate_limit(user_id, 1)
+        return self._verify_lead(lead_id, user_id)
+
+    def verify_many(
+        self, lead_ids: list[UUID], user_id: UUID, limit: int = 10
+    ) -> dict[str, object]:
+        """Verify a small batch; one failure must not stop the rest.
+
+        The whole batch is charged to the same per-minute budget as single
+        verifications, so a batch cannot be used to bypass the limiter.
+        """
+        ordered = list(dict.fromkeys(lead_ids))[:limit]
+        if not ordered:
+            raise AppError(
+                code="NO_LEADS_SELECTED",
+                message="请选择要核验的候选岗位",
+                status_code=422,
+            )
+        self._check_verify_rate_limit(user_id, len(ordered))
+        results: list[dict[str, object]] = []
+        verified = 0
+        for lead_id in ordered:
+            try:
+                lead, _outcome = self._verify_lead(lead_id, user_id)
+                verified += 1
+                results.append(
+                    {
+                        "lead_id": str(lead_id),
+                        "status": "verified",
+                        "title": lead.title,
+                        "error": None,
+                    }
+                )
+            except AppError as exc:
+                results.append(
+                    {
+                        "lead_id": str(lead_id),
+                        "status": "failed",
+                        "title": None,
+                        "error": f"{exc.code}: {exc.message}"[:200],
+                    }
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "lead_id": str(lead_id),
+                        "status": "failed",
+                        "title": None,
+                        "error": f"{type(exc).__name__}: {exc}"[:200],
+                    }
+                )
+        return {
+            "requested": len(ordered),
+            "verified": verified,
+            "failed": len(ordered) - verified,
+            "results": results,
+        }
+
+    def _verify_lead(self, lead_id: UUID, user_id: UUID) -> tuple[JobLead, UpsertOutcome]:
+        lead = self.get_for_user(lead_id, user_id)
+        if (
+            lead.job_id is not None
+            and lead.verification_status == LeadVerificationStatus.VERIFIED_OFFICIAL
+        ):
+            raise AppError(
+                code="JOB_LEAD_ALREADY_VERIFIED",
+                message="该候选岗位已完成官方核验",
+                status_code=409,
+            )
 
         try:
             official = classify_url(lead.official_url)
@@ -411,11 +473,127 @@ class JobLeadService:
             ) from exc
         if official.company == "baidu":
             return self._verify_baidu(lead)
+        # Alibaba/Kuaishou are JS-rendered: a static extractor only sees the
+        # shell and reports "JD incomplete". The local browser executes the page.
+        rendered = self._verify_with_rendered_page(lead, official)
+        if rendered is not None:
+            return rendered
         return self._verify_with_extract(lead, official, user_id)
 
     def _mark_verification_failure(self, lead: JobLead, message: str) -> None:
         lead.last_verification_attempt_at = datetime.now(UTC)
         lead.last_verification_error = message[:500]
+
+    def _rendered_source(self) -> JobSource:
+        source = self._session.scalar(
+            select(JobSource).where(
+                JobSource.source_type == "rendered_page",
+                JobSource.source_key == "rendered-page",
+            )
+        )
+        if source is None:
+            source = JobSource(
+                source_type="rendered_page",
+                source_key="rendered-page",
+                config_json={},
+                enabled=False,
+            )
+            self._session.add(source)
+            self._session.flush()
+        return source
+
+    def _verify_with_rendered_page(
+        self, lead: JobLead, official: object
+    ) -> tuple[JobLead, UpsertOutcome] | None:
+        """Read the official detail page with a real browser.
+
+        Returns ``None`` when the reader is unavailable or the page has no usable
+        JD, so the caller can still fall back to Tavily extraction.
+        """
+        from app.connectors.meituan_detail import fetch_detail as meituan_detail
+        from app.connectors.rendered_page import RenderedPageReader
+
+        # Meituan exposes the same detail as JSON; its document.title is the site
+        # name, which used to become the job title.
+        if "meituan.com" in lead.official_url:
+            detail = meituan_detail(self._settings, lead.official_url)
+            if detail:
+                now = datetime.now(UTC)
+                company_key = getattr(official, "company", None)
+                raw = RawJob(
+                    source_type="rendered_page",
+                    source_key="rendered-page",
+                    source_job_id=_hash(lead.official_url)[:32],
+                    company=COMPANY_NAMES.get(company_key or "", company_key or lead.title)[:200],
+                    title=detail["title"][:300],
+                    source_url=lead.official_url,
+                    description=detail["description"],
+                    department=detail["department"],
+                    location_text=detail["location_text"],
+                    city=detail["city"],
+                    job_type=detail["job_type"],
+                    recruitment_program=None,
+                    requirements=detail["requirements"],
+                    published_at=detail["published_at"],
+                    raw_payload={"extraction": "meituan_api"},
+                    source_method=JobSourceMethod.PUBLIC_PAGE,
+                    verification_status=VerificationStatus.VERIFIED,
+                    verified_at=now,
+                    is_demo=False,
+                    status=JobStatus.OPEN,
+                )
+                return self._persist_verified_job(
+                    lead, self._rendered_source(), raw, verification_method="rendered_page"
+                )
+
+        reader = RenderedPageReader(self._settings)
+        available, _reason = reader.available()
+        if not available:
+            return None
+        try:
+            snapshot = reader.read(lead.official_url)
+        except Exception:
+            return None
+        description = (snapshot.description or "").strip()
+        # 120 chars is enough for a real JD excerpt; short postings exist and
+        # used to fall through to the static extractor, which then failed.
+        if len(description) < 120 or snapshot.status is not JobStatus.OPEN:
+            return None
+
+        now = datetime.now(UTC)
+        company_key = getattr(official, "company", None)
+        raw = RawJob(
+            source_type="rendered_page",
+            source_key="rendered-page",
+            source_job_id=_hash(snapshot.final_url or lead.official_url)[:32],
+            company=COMPANY_NAMES.get(company_key or "", company_key or lead.title)[:200],
+            # The candidate title is user-facing; the page title is often the
+            # site name ("职位详情 | 美团招聘").
+            title=(lead.title or snapshot.title or "").strip()[:300],
+            source_url=snapshot.final_url or lead.official_url,
+            description=description,
+            department=snapshot.department,
+            location_text=snapshot.location_text,
+            city=snapshot.city,
+            job_type=snapshot.job_type,
+            recruitment_program=snapshot.recruitment_program,
+            requirements=[],
+            published_at=snapshot.published_at,
+            raw_payload={
+                "extraction": "rendered_page",
+                "final_url": snapshot.final_url,
+                "status_evidence": snapshot.status_evidence,
+                "warnings": snapshot.warnings,
+            },
+            source_method=JobSourceMethod.PUBLIC_PAGE,
+            verification_status=VerificationStatus.VERIFIED,
+            verified_at=now,
+            is_demo=False,
+            status=JobStatus.OPEN,
+        )
+        return self._persist_verified_job(
+            lead, self._rendered_source(), raw, verification_method="rendered_page"
+        )
 
     def _verify_baidu(self, lead: JobLead) -> tuple[JobLead, UpsertOutcome]:
         connector = BaiduPublicConnector(self._settings)

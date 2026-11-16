@@ -21,6 +21,7 @@ from app.schemas.job_maintenance import (
     MaintenanceScope,
     PrunePreview,
     PrunePreviewItem,
+    VerifyLeadsCreate,
     maintenance_to_read,
 )
 from app.security.csrf import require_csrf
@@ -35,10 +36,12 @@ router = APIRouter(
 
 def _dispatch(run_id: UUID, *, kind: str, recheck: bool, discover: bool) -> None:
     """Enqueue after the row is committed; a broker hiccup must not 500."""
-    from app.workers.tasks import job_prune, job_refresh
+    from app.workers.tasks import job_prune, job_refresh, job_verify_leads
 
     with suppress(Exception):
-        if kind == "prune":
+        if kind == "verify_leads":
+            job_verify_leads.delay(str(run_id))
+        elif kind == "prune":
             job_prune.delay(str(run_id))
         else:
             job_refresh.delay(str(run_id), recheck, discover)
@@ -74,6 +77,7 @@ def create_refresh(
             "discover": payload.discover,
             "max_jobs": payload.max_jobs,
             "cooldown_hours": payload.cooldown_hours,
+            "discover_depth": payload.discover_depth,
         },
     )
     if created:
@@ -139,6 +143,50 @@ def prune_preview(
             truncated=preview["truncated"],
         )
     )
+
+
+@router.post(
+    "/verify-leads",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=DataResponse[MaintenanceAccepted],
+    summary="一键核验所选企业的全部候选链接（后台执行，可取消）",
+)
+def create_verify_leads(
+    payload: VerifyLeadsCreate,
+    session: DbSession,
+    settings: AppSettings,
+    user: CurrentUser,
+) -> DataResponse[MaintenanceAccepted]:
+    service = JobMaintenanceService(session, settings)
+    run, created = service.create_run(
+        user,
+        kind="verify_leads",
+        scope={"companies": payload.companies},
+        options={"limit": payload.limit},
+    )
+    if created:
+        _dispatch(run.id, kind="verify_leads", recheck=False, discover=False)
+    return DataResponse(
+        data=MaintenanceAccepted(
+            run_id=run.id,
+            status=run.status,
+            reused=not created,
+        )
+    )
+
+
+@router.get(
+    "/latest",
+    response_model=DataResponse[MaintenanceRunRead | None],
+    summary="我最近一次更新任务（用于刷新页面后恢复）",
+)
+def latest_refresh_run(
+    session: DbSession,
+    settings: AppSettings,
+    user: CurrentUser,
+) -> DataResponse[MaintenanceRunRead | None]:
+    run = JobMaintenanceService(session, settings).latest_run_for_user(user.id)
+    return DataResponse(data=maintenance_to_read(run) if run else None)
 
 
 @router.get(

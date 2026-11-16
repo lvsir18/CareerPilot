@@ -11,9 +11,19 @@ import {
   discoverJobs,
   getOfficialSources,
   searchOfficialJobs,
+  getActivity,
+  getJobMaintenance,
+  getPendingLeadCount,
+  startLeadVerification,
   verifyJobLead,
+  verifyJobLeads,
 } from "@/lib/client-api";
-import type { DiscoveryResponse, JobLead, OfficialSourceCompany } from "@/lib/api";
+import type {
+  DiscoveryResponse,
+  JobLead,
+  MaintenanceRun,
+  OfficialSourceCompany,
+} from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -136,6 +146,14 @@ export function JobDiscoveryPanel() {
   const [result, setResult] = useState<DiscoveryResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingVerify, setPendingVerify] = useState<string | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [verifyRun, setVerifyRun] = useState<MaintenanceRun | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [verifyChooser, setVerifyChooser] = useState(false);
+  const [verifyAll, setVerifyAll] = useState(true);
+  const [verifyLimit, setVerifyLimit] = useState(50);
+  const [batchNotice, setBatchNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [officialKeyword, setOfficialKeyword] = useState(() => readUrlFilter("q") ?? "");
 
@@ -234,16 +252,21 @@ export function JobDiscoveryPanel() {
     );
   }
 
-  async function runSearch(page = 1) {
-    if (companies.length === 0) {
+  async function runSearch(
+    page = 1,
+    overrides?: { query?: string; companies?: string[] },
+  ) {
+    const activeQuery = overrides?.query ?? query;
+    const activeCompanies = overrides?.companies ?? companies;
+    if (activeCompanies.length === 0) {
       setError("至少选择一家企业。");
       return;
     }
     setBusy(true);
     setError(null);
     const response = await discoverJobs({
-      query: query.trim() || undefined,
-      companies,
+      query: activeQuery.trim() || undefined,
+      companies: activeCompanies,
       city: city.trim() || undefined,
       job_type: jobType || undefined,
       job_family: jobFamily || undefined,
@@ -259,6 +282,15 @@ export function JobDiscoveryPanel() {
       setError(response.error.message);
       return;
     }
+    const urlParams = new URLSearchParams();
+    if (activeQuery.trim()) {
+      urlParams.set("q", activeQuery.trim());
+    }
+    urlParams.set("companies", activeCompanies.join(","));
+    if (page > 1) {
+      urlParams.set("page", String(page));
+    }
+    window.history.replaceState(null, "", `/discover?${urlParams.toString()}`);
     setResult(response.data);
   }
 
@@ -307,6 +339,140 @@ export function JobDiscoveryPanel() {
       return;
     }
     await runSearch(result?.page ?? 1);
+  }
+
+  const verifiableLeads = (result?.leads ?? []).filter(
+    (lead) => lead.verification_status !== "verified_official",
+  );
+
+  async function verifyBatch() {
+    const ids = verifiableLeads.slice(0, 10).map((lead) => lead.id);
+    if (!ids.length) {
+      return;
+    }
+    setBatchBusy(true);
+    setError(null);
+    setBatchNotice(null);
+    const response = await verifyJobLeads(ids);
+    setBatchBusy(false);
+    if (!response.ok) {
+      setError(response.error.message);
+      return;
+    }
+    const { verified, failed } = response.data;
+    setBatchNotice(
+      `批量核验完成：成功 ${verified} 条${failed ? `，失败 ${failed} 条（可稍后重试）` : ""}`,
+    );
+    await runSearch(result?.page ?? 1);
+  }
+
+  // Coming back from a posting link: restore the previous search instead of an
+  // empty page, so results are not lost by a round trip to job detail.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const savedQuery = params.get("q") ?? "";
+    const savedCompanies = (params.get("companies") ?? "").split(",").filter(Boolean);
+    const savedPage = Number(params.get("page") ?? "1");
+    if (!savedQuery && !savedCompanies.length) {
+      return;
+    }
+    if (savedQuery) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot restore from the URL on mount
+      setQuery(savedQuery);
+    }
+    if (savedCompanies.length) {
+       
+      setCompanies(savedCompanies);
+    }
+    void runSearch(Number.isFinite(savedPage) && savedPage > 0 ? savedPage : 1, {
+      query: savedQuery,
+      companies: savedCompanies.length ? savedCompanies : undefined,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- restore once on mount
+  }, []);
+
+  const TERMINAL_STATUSES = new Set(["success", "partial", "failed", "cancelled"]);
+  const selectedLabels = COMPANIES.filter((item) => companies.includes(item.value)).map(
+    (item) => item.label,
+  );
+  const selectedKey = selectedLabels.join(",");
+
+  useEffect(() => {
+    if (!selectedLabels.length) {
+      return;
+    }
+    let cancelled = false;
+    void getPendingLeadCount(selectedLabels).then((counted) => {
+      if (!cancelled && counted.ok) {
+        setPendingCount(counted.data.count);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run when the picked companies change
+  }, [selectedKey]);
+
+  const currentPage = result?.page ?? 1;
+  // A verification keeps running in the worker after a reload; re-attach to it
+  // instead of showing a frozen "0 progress" state.
+  useEffect(() => {
+    let cancelled = false;
+    void getActivity().then(async (snapshot) => {
+      if (cancelled || !snapshot.ok) {
+        return;
+      }
+      const maintenance = snapshot.data.job_maintenance;
+      if (!maintenance || maintenance.kind !== "verify_leads") {
+        return;
+      }
+      const restored = await getJobMaintenance(maintenance.run_id);
+      if (!cancelled && restored.ok) {
+        setVerifyRun(restored.data);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!verifyRun || TERMINAL_STATUSES.has(verifyRun.status)) {
+      return;
+    }
+    const timer = setInterval(async () => {
+      const polled = await getJobMaintenance(verifyRun.id);
+      if (!polled.ok) {
+        return;
+      }
+      setVerifyRun(polled.data);
+      if (TERMINAL_STATUSES.has(polled.data.status)) {
+        void runSearch(currentPage);
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- poll only while this run is active
+  }, [verifyRun?.id, verifyRun?.status, currentPage]);
+
+  async function startVerifyAll() {
+    if (!selectedLabels.length) {
+      return;
+    }
+    // 全选 → no limit; 自定义 → cap at the pending count.
+    const limit = verifyAll
+      ? null
+      : Math.max(1, Math.min(verifyLimit, pendingCount ?? verifyLimit));
+    setVerifyBusy(true);
+    setError(null);
+    const result = await startLeadVerification(selectedLabels, limit ?? undefined);
+    setVerifyBusy(false);
+    if (!result.ok) {
+      setError(result.error.message);
+      return;
+    }
+    setVerifyChooser(false);
+    const run = await getJobMaintenance(result.data.run_id);
+    setVerifyRun(run.ok ? run.data : null);
   }
 
   return (
@@ -702,7 +868,7 @@ export function JobDiscoveryPanel() {
                   <td className="px-3 py-2 text-slate-600">已核验 JD</td>
                   <td className="px-3 py-2">
                     <div className="flex gap-2">
-                      <Link href={`/jobs/${job.id}`} className="text-sky-700 hover:underline">
+                      <Link href={`/jobs/${job.id}?from=discover`} className="text-sky-700 hover:underline">
                         详情
                       </Link>
                       <a
@@ -735,10 +901,130 @@ export function JobDiscoveryPanel() {
 
       {result ? (
         <section>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-slate-900">候选岗位链接</h2>
-            <span className="text-xs text-slate-500">未核验的链接不会伪装成完整 JD</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs text-slate-500">未核验的链接不会伪装成完整 JD</span>
+              {verifiableLeads.length ? (
+                <button
+                  type="button"
+                  onClick={() => void verifyBatch()}
+                  disabled={batchBusy}
+                  className="rounded-lg border border-sky-300 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 transition hover:border-sky-400 disabled:opacity-40"
+                >
+                  {batchBusy
+                    ? "核验中…"
+                    : `批量核验 ${Math.min(verifiableLeads.length, 10)} 条`}
+                </button>
+              ) : null}
+              {verifyBusy ||
+              (verifyRun && !TERMINAL_STATUSES.has(verifyRun.status)) ||
+              (pendingCount && pendingCount > 0) ? (
+                <button
+                  type="button"
+                  onClick={() => setVerifyChooser((open) => !open)}
+                  disabled={
+                    verifyBusy ||
+                    !selectedLabels.length ||
+                    Boolean(verifyRun && !TERMINAL_STATUSES.has(verifyRun.status))
+                  }
+                  className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 transition hover:border-emerald-400 disabled:opacity-40"
+                >
+                  {verifyBusy
+                    ? "启动中…"
+                    : verifyRun && !TERMINAL_STATUSES.has(verifyRun.status)
+                      ? `核验中 ${verifyRun.progress.processed ?? 0} / ${
+                          verifyRun.progress.total ?? 0
+                        }`
+                      : `核验${
+                          selectedLabels.length === 1
+                            ? `「${selectedLabels[0]}」`
+                            : "所选企业"
+                        }候选（${pendingCount} 条）`}
+                </button>
+              ) : null}
+            </div>
           </div>
+          {verifyChooser && pendingCount && pendingCount > 0 ? (
+            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
+              <p className="text-xs font-medium text-emerald-900">
+                核验
+                {selectedLabels.length === 1 ? `「${selectedLabels[0]}」` : "所选企业"}
+                的候选链接，共 {pendingCount} 条
+              </p>
+              <div className="mt-2 space-y-2">
+                <label className="flex items-center gap-2 text-xs text-slate-700">
+                  <input
+                    type="radio"
+                    name="verify-scope"
+                    checked={verifyAll}
+                    onChange={() => setVerifyAll(true)}
+                    className="size-3.5 accent-emerald-600"
+                  />
+                  全选 · 全部 {pendingCount} 条（后台跑完为止，可随时取消）
+                </label>
+                <label className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
+                  <input
+                    type="radio"
+                    name="verify-scope"
+                    checked={!verifyAll}
+                    onChange={() => setVerifyAll(false)}
+                    className="size-3.5 accent-emerald-600"
+                  />
+                  自定义
+                  <input
+                    type="number"
+                    min={1}
+                    max={pendingCount}
+                    value={verifyLimit}
+                    onFocus={() => setVerifyAll(false)}
+                    onChange={(event) => setVerifyLimit(Number(event.target.value) || 1)}
+                    className="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm"
+                  />
+                  条（最多 {pendingCount}）
+                </label>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void startVerifyAll()}
+                  disabled={verifyBusy}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+                >
+                  {verifyBusy
+                    ? "启动中…"
+                    : verifyAll
+                      ? `开始核验全部 ${pendingCount} 条`
+                      : `开始核验 ${Math.max(1, Math.min(verifyLimit, pendingCount))} 条`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVerifyChooser(false)}
+                  className="text-xs text-slate-500 hover:underline"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {batchNotice ? (
+            <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              {batchNotice}
+            </p>
+          ) : null}
+          {verifyRun && !TERMINAL_STATUSES.has(verifyRun.status) ? (
+            <p className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+              正在核验 {verifyRun.progress.processed ?? 0} / {verifyRun.progress.total ?? 0}
+              {verifyRun.progress.current ? ` · ${verifyRun.progress.current}` : ""}
+              —— 可以切到其他页面，完成后列表会自动刷新
+            </p>
+          ) : null}
+          {verifyRun && TERMINAL_STATUSES.has(verifyRun.status) ? (
+            <p className="mt-2 text-xs text-slate-500">
+              上次核验：成功 {verifyRun.result.counters?.verified ?? 0} 条，失败{" "}
+              {verifyRun.result.counters?.failed ?? 0} 条
+            </p>
+          ) : null}
           {result.leads.length === 0 ? (
             <p className="mt-3 rounded-lg border border-dashed border-slate-300 p-5 text-sm text-slate-500">
               没有候选链接。可以换关键词，或到“导入岗位”粘贴官方链接与 JD。
@@ -803,7 +1089,7 @@ export function JobDiscoveryPanel() {
                     </a>
                     {lead.job_id ? (
                       <Link
-                        href={`/jobs/${lead.job_id}`}
+                        href={`/jobs/${lead.job_id}?from=discover`}
                         className="text-slate-700 hover:underline"
                       >
                         查看已核验岗位

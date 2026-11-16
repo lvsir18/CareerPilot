@@ -472,55 +472,6 @@ export default function EmailSettingsPage() {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-900">账号安全</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          修改登录密码。当前浏览器会保持登录，其他设备上的会话会立即失效。
-        </p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-          <input
-            type="password"
-            value={currentPassword}
-            onChange={(event) => setCurrentPassword(event.target.value)}
-            placeholder="当前密码"
-            autoComplete="current-password"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          />
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-            placeholder="新密码（至少 8 位）"
-            autoComplete="new-password"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          />
-          <input
-            type="password"
-            value={confirmPassword}
-            onChange={(event) => setConfirmPassword(event.target.value)}
-            placeholder="再次输入新密码"
-            autoComplete="new-password"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => void handleChangePassword()}
-            disabled={passwordBusy}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-          >
-            {passwordBusy ? "更新中…" : "更新密码"}
-          </button>
-          {passwordError ? (
-            <span className="text-xs text-rose-700">{passwordError}</span>
-          ) : null}
-          {passwordNotice ? (
-            <span className="text-xs text-emerald-700">{passwordNotice}</span>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-900">模型 API</h2>
           <span
@@ -692,6 +643,55 @@ export default function EmailSettingsPage() {
           {searchError ? <span className="text-xs text-rose-700">{searchError}</span> : null}
           {searchNotice ? <span className="text-xs text-emerald-700">{searchNotice}</span> : null}
           {searchTest ? <span className="text-xs text-emerald-700">{searchTest}</span> : null}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-sm font-semibold text-slate-900">账号安全</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          修改登录密码。当前浏览器会保持登录，其他设备上的会话会立即失效。
+        </p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+            placeholder="当前密码"
+            autoComplete="current-password"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            placeholder="新密码（至少 8 位）"
+            autoComplete="new-password"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            placeholder="再次输入新密码"
+            autoComplete="new-password"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void handleChangePassword()}
+            disabled={passwordBusy}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+          >
+            {passwordBusy ? "更新中…" : "更新密码"}
+          </button>
+          {passwordError ? (
+            <span className="text-xs text-rose-700">{passwordError}</span>
+          ) : null}
+          {passwordNotice ? (
+            <span className="text-xs text-emerald-700">{passwordNotice}</span>
+          ) : null}
         </div>
       </section>
     </div>

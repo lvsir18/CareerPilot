@@ -246,6 +246,7 @@ export function startJobMaintenance(payload: {
   discover: boolean;
   max_jobs?: number;
   cooldown_hours?: number;
+  discover_depth?: "quick" | "standard" | "deep";
 }): Promise<ApiResult<{ run_id: string; status: string; reused: boolean }>> {
   return request("/api/v1/job-maintenance", { method: "POST", body: payload });
 }
@@ -261,6 +262,11 @@ export function startJobPrune(
 
 export function getJobMaintenance(runId: string): Promise<ApiResult<MaintenanceRun>> {
   return request<MaintenanceRun>(`/api/v1/job-maintenance/${runId}`);
+}
+
+/** Newest run of any status: lets the page resume a running sweep or replay the last one. */
+export function getLatestJobMaintenance(): Promise<ApiResult<MaintenanceRun | null>> {
+  return request<MaintenanceRun | null>("/api/v1/job-maintenance/latest");
 }
 
 export function cancelJobMaintenance(runId: string): Promise<ApiResult<undefined>> {
@@ -486,6 +492,45 @@ export function discoverJobs(
 
 export function verifyJobLead(leadId: string): Promise<ApiResult<unknown>> {
   return request(`/api/v1/job-leads/${leadId}/verify`, { method: "POST" });
+}
+
+export function verifyJobLeads(leadIds: string[]): Promise<
+  ApiResult<{
+    requested: number;
+    verified: number;
+    failed: number;
+    results: { lead_id: string; status: string; title: string | null; error: string | null }[];
+  }>
+> {
+  return request("/api/v1/job-leads/verify-batch", {
+    method: "POST",
+    body: { lead_ids: leadIds },
+    // A batch of 10 pages can take a minute; the default 6s would abort it.
+    timeoutMs: 120000,
+  });
+}
+
+export function getPendingLeadCount(
+  companies: string[],
+): Promise<ApiResult<{ count: number }>> {
+  const params = new URLSearchParams();
+  if (companies.length) {
+    params.set("companies", companies.join(","));
+  }
+  const query = params.toString();
+  return request<{ count: number }>(
+    `/api/v1/job-leads/pending-count${query ? `?${query}` : ""}`,
+  );
+}
+
+export function startLeadVerification(
+  companies: string[],
+  limit?: number,
+): Promise<ApiResult<{ run_id: string; status: string; reused: boolean }>> {
+  return request("/api/v1/job-maintenance/verify-leads", {
+    method: "POST",
+    body: { companies, limit: limit ?? null },
+  });
 }
 
 export function getJobLead(leadId: string): Promise<ApiResult<JobLeadDetail>> {

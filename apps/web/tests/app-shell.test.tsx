@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "@/components/app-shell";
@@ -74,5 +74,34 @@ describe("侧边导航的后台任务标记", () => {
 
     await waitFor(() => expect(api.getActivity).toHaveBeenCalled());
     expect(screen.queryByLabelText("后台任务运行中")).toBeNull();
+  });
+
+  it("核验候选任务的图标显示在「发现岗位」，不显示在「岗位库」", async () => {
+    api.getActivity.mockResolvedValue({
+      ok: true,
+      data: {
+        job_maintenance: {
+          run_id: "run-leads",
+          kind: "verify_leads",
+          status: "running",
+          total: 12,
+          processed: 3,
+        },
+        agent: null,
+      },
+    });
+
+    render(
+      <AppShell userEmail="a@example.com">
+        <div>内容</div>
+      </AppShell>,
+    );
+
+    const discover = await screen.findByRole("link", { name: /发现岗位/ });
+    await waitFor(() =>
+      expect(within(discover).getByLabelText("后台任务运行中")).toBeInTheDocument(),
+    );
+    const jobs = screen.getByRole("link", { name: /岗位库/ });
+    expect(within(jobs).queryByLabelText("后台任务运行中")).toBeNull();
   });
 });

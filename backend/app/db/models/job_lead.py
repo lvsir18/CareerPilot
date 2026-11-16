@@ -94,7 +94,8 @@ class SourceEvidence(UUIDPrimaryKeyMixin, Base):
         ),
         CheckConstraint(
             "verification_method IN ('search_provider', 'official_list_page', "
-            "'public_page_parse', 'user_confirmed', 'none')",
+            "'public_page_parse', 'tavily_extract', 'rendered_page', "
+            "'user_confirmed', 'none')",
             name="verification_method_valid",
         ),
         CheckConstraint(

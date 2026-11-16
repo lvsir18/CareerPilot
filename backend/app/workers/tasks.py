@@ -353,3 +353,12 @@ def job_prune(run_id: str) -> dict[str, Any]:
 
     with session_scope() as session:
         return JobMaintenanceService(session, get_settings()).execute_prune(UUID(run_id))
+
+
+@celery_app.task(name="careerpilot.job_verify_leads")
+def job_verify_leads(run_id: str) -> dict[str, Any]:
+    """Verify every pending candidate link of the selected companies."""
+    from app.services.job_maintenance_service import JobMaintenanceService
+
+    with session_scope() as session:
+        return JobMaintenanceService(session, get_settings()).execute_verify_leads(UUID(run_id))

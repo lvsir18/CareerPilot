@@ -21,6 +21,7 @@ import re
 import socket
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -168,6 +169,62 @@ class PageSnapshot:
     # open / closed / unknown + the sentence that justified it.
     status: JobStatus = JobStatus.UNKNOWN
     status_evidence: str | None = None
+    # Structured labels the page shows next to the JD (在招业务 / 部门 / 更新于 …).
+    # They are plain text on every site, just with different wording.
+    department: str | None = None
+    published_at: datetime | None = None
+    recruitment_program: str | None = None
+    job_category: str | None = None
+
+
+# Each site renders the same facts as plain labels next to the JD; only the
+# wording differs (阿里 “在招业务/更新于”, 美团 “部门：/更新时间：”).
+_FIELD_LABELS: dict[str, tuple[str, ...]] = {
+    "department": ("在招业务", "所属部门", "所属业务", "业务集团", "部门"),
+    "published_at": ("更新于", "更新时间", "发布时间", "发布日期", "上线时间"),
+    "city": ("工作地点", "工作城市", "办公地点", "城市"),
+    "recruitment_program": ("招聘项目", "招聘类型", "项目"),
+    "job_category": ("职位类别", "职位类型", "岗位类别"),
+}
+_LABEL_VALUE_MAX = 120
+
+
+def _labeled_fields(text: str) -> dict[str, str]:
+    """Pull ``标签：值`` / ``标签<换行>值`` pairs out of the page text."""
+    lines = [line.strip() for line in (text or "").splitlines()]
+    found: dict[str, str] = {}
+    for index, line in enumerate(lines):
+        if not line or len(line) > _LABEL_VALUE_MAX:
+            continue
+        for name, labels in _FIELD_LABELS.items():
+            if name in found:
+                continue
+            for label in labels:
+                if not line.startswith(label):
+                    continue
+                rest = line[len(label) :].lstrip(":： \t")
+                if rest:
+                    found[name] = rest
+                elif index + 1 < len(lines):
+                    nxt = lines[index + 1]
+                    if nxt and len(nxt) <= _LABEL_VALUE_MAX:
+                        found[name] = nxt
+                break
+    return found
+
+
+def _parse_label_date(raw: str | None) -> datetime | None:
+    """``2026-03-26`` / ``2026/11/16`` → UTC datetime (date precision)."""
+    if not raw:
+        return None
+    match = re.search(r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})", raw)
+    if not match:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    try:
+        return datetime(year, month, day, tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 def detect_posting_status(
@@ -256,6 +313,13 @@ class RenderedPageReader:
 
                 assert_public_url(page.url)
                 data = self._wait_for_detail(page)
+                # Labels like 更新于/在招业务/招聘项目 sit outside the extracted
+                # JD block, so keep the whole visible text for them — read it
+                # *after* the JD wait, otherwise the SPA is still empty.
+                try:
+                    page_text = page.inner_text("body")
+                except PlaywrightError:
+                    page_text = ""
                 warnings: list[str] = []
                 if urlsplit(page.url).hostname == "career.huawei.com":
                     try:
@@ -290,18 +354,27 @@ class RenderedPageReader:
             target_url=target,
             final_url=final_url,
         )
+        labeled = _labeled_fields(page_text or description or "")
         return PageSnapshot(
             url=target,
             final_url=final_url,
             title=title,
             description=description,
-            city=self._guess_city(metadata) or self._guess_labeled_city(description),
-            location_text=self._guess_city(metadata),
+            city=(
+                self._guess_city(metadata)
+                or labeled.get("city")
+                or self._guess_labeled_city(description)
+            ),
+            location_text=self._guess_city(metadata) or labeled.get("city"),
             job_type=self._guess_job_type(title, metadata),
             site_name=site_name,
             warnings=warnings,
             status=status,
             status_evidence=status_evidence,
+            department=labeled.get("department"),
+            published_at=_parse_label_date(labeled.get("published_at")),
+            recruitment_program=labeled.get("recruitment_program"),
+            job_category=labeled.get("job_category"),
         )
 
     @staticmethod

@@ -6,8 +6,8 @@ import { Archive, RefreshCw, X } from "lucide-react";
 
 import {
   cancelJobMaintenance,
-  getActivity,
   getJobMaintenance,
+  getLatestJobMaintenance,
   getOfficialSources,
   previewJobPrune,
   startJobMaintenance,
@@ -58,6 +58,7 @@ export function JobMaintenancePanel({
   const [sources, setSources] = useState<OfficialSourceCompany[]>([]);
   const [maxJobs, setMaxJobs] = useState(100);
   const [cooldownHours, setCooldownHours] = useState(6);
+  const [discoverDepth, setDiscoverDepth] = useState<"quick" | "standard" | "deep">("standard");
   const [run, setRun] = useState<MaintenanceRun | null>(null);
   const [preview, setPreview] = useState<PrunePreview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -80,17 +81,14 @@ export function JobMaintenancePanel({
     .filter((item) => !item.supported)
     .map((item) => item.label);
 
-  // Coming back to this page while a sweep is still running re-attaches to it
-  // instead of showing "nothing happened".
+  // Coming back to this page resumes a running sweep, or replays the last one.
+  // A discover-only run often finishes in seconds, so an empty panel after
+  // switching tabs looked like the click did nothing at all.
   useEffect(() => {
     let cancelled = false;
-    void getActivity().then(async (snapshot) => {
-      if (cancelled || !snapshot.ok || !snapshot.data.job_maintenance) {
-        return;
-      }
-      const result = await getJobMaintenance(snapshot.data.job_maintenance.run_id);
-      if (!cancelled && result.ok) {
-        setRun(result.data);
+    void getLatestJobMaintenance().then((latest) => {
+      if (!cancelled && latest.ok && latest.data) {
+        setRun(latest.data);
       }
     });
     return () => {
@@ -124,6 +122,7 @@ export function JobMaintenancePanel({
       discover,
       max_jobs: maxJobs,
       cooldown_hours: cooldownHours,
+      discover_depth: discoverDepth,
     });
     setBusy(false);
     if (!result.ok) {
@@ -132,6 +131,9 @@ export function JobMaintenancePanel({
     }
     const created = await getJobMaintenance(result.data.run_id);
     setRun(created.ok ? created.data : null);
+    // The dialog is a launcher: close it so the progress panel underneath is
+    // visible (a modal that stays open hid the very progress it started).
+    setDialog(null);
   }
 
   async function openPrune() {
@@ -159,6 +161,7 @@ export function JobMaintenancePanel({
     }
     const created = await getJobMaintenance(result.data.run_id);
     setRun(created.ok ? created.data : null);
+    setDialog(null);
   }
 
   async function stopRun() {
@@ -202,6 +205,11 @@ export function JobMaintenancePanel({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-medium text-slate-800">
               {run.kind === "prune" ? "清理已下线" : "更新岗位"} · {run.status}
+              {running ? null : (
+                <span className="ml-1.5 text-xs font-normal text-slate-400">
+                  {run.finished_at ? formatDateTime(run.finished_at) : ""}
+                </span>
+              )}
             </span>
             <div className="flex items-center gap-2">
               {running ? (
@@ -343,10 +351,30 @@ export function JobMaintenancePanel({
                   <span>
                     发现新增岗位
                     <span className="block text-xs text-slate-500">
-                      按当前企业与关键词从已适配官网检索并入库；已有岗位只更新，不新建
+                      从已适配官网检索并入库；会按多个方向（大模型 / 算法 / 后端 / 前端 / 数据）
+                      逐轮抓取，已有岗位只更新，不新建
                     </span>
                   </span>
                 </label>
+                {discover ? (
+                  <label className="block text-xs text-slate-600">
+                    发现深度
+                    <select
+                      value={discoverDepth}
+                      onChange={(event) =>
+                        setDiscoverDepth(event.target.value as "quick" | "standard" | "deep")
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                    >
+                      <option value="quick">快速 · 每家 10 个岗位 / 1 个关键词</option>
+                      <option value="standard">标准 · 每家 30 个岗位 / 3 个关键词</option>
+                      <option value="deep">深度 · 每家 50 个岗位 / 6 个关键词</option>
+                    </select>
+                    <span className="mt-1 block text-[11px] text-slate-400">
+                      越深越慢，但能翻到列表更里面的岗位；只抓官方招聘站公开列表，不发实时搜索请求。
+                    </span>
+                  </label>
+                ) : null}
                 {unsupportedSources.length ? (
                   <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                     不支持自动发现：{unsupportedSources.join("、")}

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BookOpen,
   Bot,
   Briefcase,
   CalendarDays,
@@ -85,6 +86,11 @@ const NAV_ITEMS: NavItem[] = [
     icon: <ClipboardList className="size-4" aria-hidden />,
   },
   {
+    label: "使用手册",
+    href: "/guide",
+    icon: <BookOpen className="size-4" aria-hidden />,
+  },
+  {
     label: "设置",
     href: "/settings/email",
     icon: <Settings className="size-4" aria-hidden />,
@@ -130,8 +136,13 @@ export function AppShell({
   }, []);
 
   function isBusy(href: string | undefined): boolean {
+    // Candidate verification belongs to 发现岗位, everything else to 岗位库.
     if (href === "/jobs") {
-      return Boolean(activity?.job_maintenance);
+      const kind = activity?.job_maintenance?.kind;
+      return Boolean(kind) && kind !== "verify_leads";
+    }
+    if (href === "/discover") {
+      return activity?.job_maintenance?.kind === "verify_leads";
     }
     if (href === "/agent") {
       return Boolean(activity?.agent);

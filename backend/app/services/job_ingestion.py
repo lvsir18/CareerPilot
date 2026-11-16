@@ -201,6 +201,10 @@ def upsert_raw_job(session: Session, source: JobSource, raw: RawJob) -> UpsertOu
             source_method=source_method,
             verification_status=raw.verification_status,
             verified_at=raw.verified_at,
+            # A verified import counts as a successful check, so the re-check
+            # cooldown applies to it too. Without this every sweep re-read the
+            # handful of manually imported postings first.
+            last_verified_at=raw.verified_at,
         )
         session.add(job)
         session.flush()
@@ -226,6 +230,8 @@ def upsert_raw_job(session: Session, source: JobSource, raw: RawJob) -> UpsertOu
     existing.source_method = source_method
     existing.verification_status = raw.verification_status
     existing.verified_at = raw.verified_at
+    if raw.verified_at is not None:
+        existing.last_verified_at = raw.verified_at
     # Absence from a fetch is not proof of closure: only an explicit source
     # status may change an existing job's state.
     if status is not None:

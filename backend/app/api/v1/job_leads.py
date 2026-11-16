@@ -13,6 +13,8 @@ from app.schemas.leads import (
     JobLeadRead,
     LeadImportRequest,
     LeadVerificationResult,
+    LeadVerifyBatchRequest,
+    LeadVerifyBatchResult,
     OfficialSourceRead,
     TrustedTenantRead,
     lead_to_read,
@@ -21,6 +23,7 @@ from app.search.source_catalog import official_sources
 from app.security.csrf import require_csrf
 from app.services.job_discovery_service import JobDiscoveryService
 from app.services.job_lead_service import JobLeadService
+from app.services.job_maintenance_service import JobMaintenanceService
 
 router = APIRouter(prefix="/job-leads", tags=["job-leads"], dependencies=[Depends(require_csrf)])
 
@@ -104,6 +107,37 @@ def import_lead(
         company=payload.company,
     )
     return DataResponse(data=lead_to_read(lead))
+
+
+@router.post(
+    "/verify-batch",
+    response_model=DataResponse[LeadVerifyBatchResult],
+    summary="批量核验候选岗位（单条失败不影响其他）",
+)
+def verify_leads_batch(
+    payload: LeadVerifyBatchRequest,
+    session: DbSession,
+    settings: AppSettings,
+    user: CurrentUser,
+) -> DataResponse[LeadVerifyBatchResult]:
+    data = JobLeadService(session, settings).verify_many(payload.lead_ids, user.id)
+    return DataResponse(data=LeadVerifyBatchResult(**data))
+
+
+@router.get(
+    "/pending-count",
+    response_model=DataResponse[dict],
+    summary="所选企业待核验的候选数量（用于按钮文案）",
+)
+def pending_lead_count(
+    session: DbSession,
+    settings: AppSettings,
+    user: CurrentUser,
+    companies: str | None = Query(default=None, description="逗号分隔的企业名"),
+) -> DataResponse[dict]:
+    names = [item.strip() for item in (companies or "").split(",") if item.strip()]
+    count = JobMaintenanceService(session, settings).pending_lead_count(user.id, names)
+    return DataResponse(data={"count": count})
 
 
 @router.get(

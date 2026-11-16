@@ -78,6 +78,25 @@ CITY_KEYS = (
     "workcitylist",
     "citynamelist",
 )
+# Each site names the org unit differently: Meituan has ``department``,
+# ByteDance only ``job_category``/``job_function``, Xiaohongshu
+# ``directionName``. Without these the library showed an empty 部门 for almost
+# every posting even though the page displays one.
+DEPARTMENT_KEYS = (
+    "department",
+    "departmentname",
+    "bg",
+    "bgname",
+    "jobfamily",
+    "jobfamilygroup",
+    "jobcategory",
+    "jobfunction",
+    "directionname",
+    "subdirectionname",
+    "jobprojectname",
+    "postcodename",
+)
+
 URL_KEYS = ("joburl", "positionurl", "posturl", "detailurl", "url", "link")
 ID_KEYS = ("jobid", "positionid", "positionid", "jobunionid", "postid", "id", "code")
 HIRE_TYPE_KEYS = (
@@ -212,7 +231,18 @@ def find_job_list(payload: Any, depth: int = 0) -> list[dict[str, Any]] | None:
 def _published_at(row: dict[str, Any]) -> datetime | None:
     """Convert epoch millis/seconds or an ISO-ish date string to UTC."""
     raw = _pick(
-        row, ("publishtime", "pushtime", "publishdate", "createtime", "onlinetime", "firstposttime")
+        row,
+        (
+            "publishtime",
+            "pushtime",
+            "publishdate",
+            "createtime",
+            "onlinetime",
+            "firstposttime",
+            "refreshtime",
+            "lastposttime",
+            "updatetime",
+        ),
     )
     if not raw:
         return None
@@ -345,9 +375,35 @@ class RenderedJobSearch:
                     page.keyboard.press("Enter")
                 gate["open"] = True
                 waited = 0
+                next_scroll = 1200
                 while waited < deadline_ms and len(captured.jobs) < limit:
                     page.wait_for_timeout(500)
                     waited += 500
+                    if waited >= next_scroll:
+                        # Infinite-scroll lists (ByteDance/Xiaohongshu/Meituan)
+                        # only request the next page after a real scroll; just
+                        # waiting used to cap every crawl at the first 10 rows,
+                        # which made the deeper discover modes do nothing.
+                        page.mouse.wheel(0, 2400)
+                        # ByteDance renders the list in an inner scroll container,
+                        # so a window-level wheel moves nothing there.
+                        page.evaluate(
+                            "() => {"
+                            " const el = [...document.querySelectorAll('div')]"
+                            "  .find(d => d.scrollHeight > d.clientHeight + 200);"
+                            " if (el) { el.scrollTop = el.scrollHeight; }"
+                            " else { window.scrollBy(0, 2400); }"
+                            "}"
+                        )
+                        # Some lists page behind a "load more" button instead of
+                        # scroll-triggered fetching.
+                        for label in ("加载更多", "查看更多", "更多岗位"):
+                            try:
+                                page.get_by_text(label, exact=False).first.click(timeout=800)
+                                break
+                            except Exception:
+                                continue
+                        next_scroll += 1200
                 context.close()
             finally:
                 browser.close()
@@ -429,7 +485,7 @@ class RenderedJobSearch:
             title=title,
             source_url=detail,
             description=description,
-            department=_pick(row, ("department", "departmentname", "bg", "bgname")),
+            department=_pick(row, DEPARTMENT_KEYS),
             location_text=city_text,
             city=_city(city_text),
             job_type=job_type,

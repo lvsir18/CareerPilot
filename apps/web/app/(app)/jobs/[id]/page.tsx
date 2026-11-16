@@ -30,10 +30,18 @@ function MetaRow({ label, value }: { label: string; value: string }) {
 
 export default async function JobDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  // Opening a posting from 发现岗位 must return there (with its search state),
+  // not jump to 岗位库 and lose the results.
+  const query = (await searchParams) ?? {};
+  const fromDiscover = String(query.from ?? "") === "discover";
+  const backHref = fromDiscover ? "/discover" : "/jobs";
+  const backLabel = fromDiscover ? "返回发现岗位" : "返回岗位库";
   const cookie = (await cookies()).toString();
   // Save state is a page-level fact: the sidebar button must offer "取消收藏"
   // on a job the user already saved, not a second "收藏".
@@ -57,8 +65,11 @@ export default async function JobDetailPage({
         <p className="mt-2 text-sm text-rose-700">
           {result.error.message}（{result.error.code}）
         </p>
-        <Link href="/jobs" className="mt-4 inline-flex text-sm font-medium text-rose-800 underline">
-          返回岗位库
+        <Link
+          href={backHref}
+          className="mt-4 inline-flex text-sm font-medium text-rose-800 underline"
+        >
+          {backLabel}
         </Link>
       </div>
     );
@@ -69,11 +80,11 @@ export default async function JobDetailPage({
   return (
     <div className="space-y-6">
       <Link
-        href="/jobs"
+        href={backHref}
         className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800"
       >
         <ArrowLeft className="size-3.5" aria-hidden />
-        返回岗位库
+        {backLabel}
       </Link>
 
       <div className="grid gap-6 lg:grid-cols-3">

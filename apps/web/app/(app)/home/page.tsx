@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   ArrowRight,
+  BookOpen,
   Bot,
   CalendarCheck,
   FileSearch,
@@ -128,6 +129,27 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      <Link
+        href="/guide"
+        className="group flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-sky-300 hover:shadow-md"
+      >
+        <div className="flex items-center gap-3">
+          <span className="inline-flex size-10 items-center justify-center rounded-xl bg-sky-50 text-sky-700 ring-1 ring-sky-100">
+            <BookOpen className="size-5" aria-hidden />
+          </span>
+          <div>
+            <p className="text-sm font-medium text-slate-900">第一次使用？看使用手册</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              五分钟上手、页面地图、维护岗位库、多轮追问与多端访问
+            </p>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1 text-sm font-medium text-sky-700">
+          打开手册
+          <ArrowRight className="size-4 transition group-hover:translate-x-0.5" aria-hidden />
+        </span>
+      </Link>
 
       <section className="space-y-4">
         <div className="flex items-end justify-between gap-3">

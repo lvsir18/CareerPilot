@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     search_daily_budget_per_provider: int = Field(default=50, ge=1, le=10000)
     search_cache_ttl_seconds: int = Field(default=600, ge=0, le=86400)
     official_site_discovery_enabled: bool = True
+    # 「发现新增」的深度：每个企业抓多少条、最多用几个关键词。
+    # 关键词矩阵让不同方向（大模型/算法/后端/前端/数据）都能被抓到，
+    # 否则每次只看列表前 10 条，早已入库的岗位会一直 unchanged。
+    job_discover_max_per_company: int = Field(default=100, ge=5, le=200)
+    job_discover_max_keywords: int = Field(default=10, ge=1, le=20)
+    job_discover_keywords: str = "大模型,算法,后端,前端,数据"
     lead_verify_rate_limit_per_minute: int = Field(default=10, ge=1, le=100)
 
     file_storage_dir: Path = Path("./var/uploads")

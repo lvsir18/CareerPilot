@@ -161,6 +161,22 @@ class OfficialUrl:
     tenant_path_prefix: str | None = None
 
 
+_HASH_DETAIL_ROUTES = frozenset({"details", "detail", "job-detail", "jobdetail", "position-detail"})
+
+
+def _is_hash_detail(fragment: str) -> bool:
+    """Hash-routed sites keep the route after ``#`` (JD: ``#/details?id=123``).
+
+    The path is ``/`` in that case, so path-based detection can never see it.
+    """
+    if not fragment:
+        return False
+    route, _, query = fragment.partition("?")
+    if not query:
+        return False
+    return route.strip("/").lower() in _HASH_DETAIL_ROUTES
+
+
 _DETAIL_MARKERS = (
     "/detail",
     "/position/",
@@ -255,12 +271,27 @@ def domains_for(company_keys: list[str]) -> list[str]:
     return search_domains_for(company_keys)
 
 
+def _registrable_domain(host: str) -> str:
+    parts = host.lower().split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+# Companies move their campus site to new subdomains (Alibaba's new site lives
+# on ``campus-talent.alibaba.com`` while the table only listed
+# ``talent.alibaba.com``). A registrable-domain fallback keeps those links
+# verifiable instead of rejecting a genuine official detail page.
+_ROOT_DOMAIN_OWNER: dict[str, str] = {}
+for _company_key, _company_hosts in COMPANY_DOMAINS.items():
+    for _company_host in _company_hosts:
+        _ROOT_DOMAIN_OWNER.setdefault(_registrable_domain(_company_host), _company_key)
+
+
 def company_for_host(host: str) -> str | None:
     normalized = host.lower()
     for key, domains in COMPANY_DOMAINS.items():
         if normalized in domains:
             return key
-    return None
+    return _ROOT_DOMAIN_OWNER.get(_registrable_domain(normalized))
 
 
 def _query_has_list_filter(query: str) -> bool:
@@ -327,7 +358,7 @@ def analyze_url(url: str) -> OfficialUrl:
     company = company_for_host(host)
     tenant: TrustedTenant | None = None
     if company is not None:
-        if _is_official_detail(path, parsed.query, company):
+        if _is_official_detail(path, parsed.query, company) or _is_hash_detail(parsed.fragment):
             url_type = "official_job_detail"
         elif any(marker in path.lower() for marker in _LIST_MARKERS):
             url_type = "official_job_list"
@@ -357,7 +388,10 @@ def analyze_url(url: str) -> OfficialUrl:
         for key, value in parse_qsl(parsed.query, keep_blank_values=False)
         if not key.lower().startswith("utm_") and key.lower() not in {"source", "ref"}
     ]
-    fragment = parsed.fragment if tenant is not None and tenant.provider == "moka" else ""
+    keep_fragment = (tenant is not None and tenant.provider == "moka") or _is_hash_detail(
+        parsed.fragment
+    )
+    fragment = parsed.fragment if keep_fragment else ""
     canonical = urlunsplit(
         (
             "https",

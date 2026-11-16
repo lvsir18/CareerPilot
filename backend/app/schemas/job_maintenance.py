@@ -33,6 +33,8 @@ class MaintenanceCreate(BaseModel):
     max_jobs: int | None = Field(default=None, ge=1, le=200)
     # Skip postings verified within N hours (0 = no cooldown, max 7 days).
     cooldown_hours: int | None = Field(default=None, ge=0, le=168)
+    # How deep the "discover new" sweep goes (postings per company × keywords).
+    discover_depth: Literal["quick", "standard", "deep"] = "standard"
 
 
 class MaintenanceRunRead(BaseModel):
@@ -83,3 +85,11 @@ def maintenance_to_read(run: Any) -> MaintenanceRunRead:
         started_at=run.started_at,
         finished_at=run.finished_at,
     )
+
+
+class VerifyLeadsCreate(BaseModel):
+    """One click: verify every pending candidate of the selected companies."""
+
+    companies: list[str] = Field(default_factory=list, max_length=20)
+    # ``None`` verifies every pending candidate (the UI offers 全选 / 自定义数量).
+    limit: int | None = Field(default=None, ge=1, le=1000)

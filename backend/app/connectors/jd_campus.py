@@ -32,6 +32,10 @@ from app.db.models.enums import JobSourceMethod, JobStatus, VerificationStatus
 
 LIST_URL = "https://campus.jd.com/api/wx/position/page?type=present"
 LIST_PAGE = "https://campus.jd.com/#/jobs"
+# The list API returns no detail URL. The site is a hash-routed SPA, and every
+# posting is addressable as ``#/details?id=<publishId>``; without this the stored
+# source_url was the list page, so JD postings could never be re-checked.
+DETAIL_PAGE = "https://campus.jd.com/#/details?id={position_id}"
 SOURCE_TYPE = "jd_campus"
 SOURCE_KEY = "jd-campus"
 COMPANY = "京东"
@@ -140,7 +144,7 @@ class JdCampusConnector:
             title=title,
             # The list has no per-job detail route that survives a hash reload, so
             # the list page is the honest link.
-            source_url=LIST_PAGE,
+            source_url=DETAIL_PAGE.format(position_id=position_id),
             description=_text(item.get("workContent")),
             department=direction,
             location_text=None,

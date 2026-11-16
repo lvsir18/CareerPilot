@@ -455,3 +455,44 @@ def test_fallback_broad_query_runs_after_listing_only_result() -> None:
     assert outcome.hits[0].search_layer in {"broad", "entry"}
     assert outcome.diagnostics[0].accepted == 1
     assert "exact" in outcome.diagnostics[0].layers
+
+
+def test_company_subdomains_are_recognised_for_detail_pages() -> None:
+    """A company's campus site may live on a new subdomain.
+
+    Alibaba's new site is ``campus-talent.alibaba.com`` while the table only
+    listed ``talent.alibaba.com``; rejecting the link made every manually
+    imported Alibaba posting unverifiable.
+    """
+    from app.search.domains import analyze_url, classify_url
+
+    alibaba = analyze_url(
+        "https://campus-talent.alibaba.com/campus/position/199905080003?deptCodes="
+    )
+    assert alibaba.company == "alibaba"
+    assert alibaba.url_type == "official_job_detail"
+
+    listing = analyze_url("https://campus-talent.alibaba.com/campus/position")
+    assert listing.url_type == "official_job_list"
+
+    # A lookalike domain must stay untrusted.
+    lookalike = analyze_url("https://campus-talent.alibaba.com.evil.com/campus/position/1")
+    assert lookalike.url_type == "unrelated_page"
+    assert lookalike.source_kind == "untrusted"
+    with pytest.raises(ValueError):
+        classify_url("https://campus-talent.alibaba.com.evil.com/campus/position/1")
+
+
+def test_hash_routed_detail_pages_are_recognised() -> None:
+    """JD's SPA keeps the whole route after ``#``; the path alone is "/"."""
+    from app.search.domains import analyze_url, classify_url
+
+    detail = analyze_url("https://campus.jd.com/#/details?id=9095")
+    assert detail.url_type == "official_job_detail"
+    assert detail.url.endswith("#/details?id=9095")
+    assert classify_url("https://campus.jd.com/#/details?id=9095").company == "jd"
+
+    listing = analyze_url("https://campus.jd.com/#/jobs")
+    assert listing.url_type == "recruitment_landing_page"
+    with pytest.raises(ValueError):
+        classify_url("https://campus.jd.com/#/jobs")

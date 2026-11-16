@@ -451,3 +451,304 @@ def test_activity_is_empty_without_background_work(app: FastAPI, settings: Setti
         response = client.get("/api/v1/system/activity")
 
     assert response.json()["data"] == {"job_maintenance": None, "agent": None}
+
+
+def test_latest_run_lets_the_page_resume_after_a_reload(app: FastAPI, settings: Settings) -> None:
+    """A discover-only run finishes in seconds; the page must still show it."""
+    with AutoCsrfTestClient(app, settings) as client:
+        register_user(client, email="latest-run@example.com")
+
+        assert client.get("/api/v1/job-maintenance/latest").json()["data"] is None
+
+        created = client.post(
+            "/api/v1/job-maintenance",
+            json={"kind": "discover", "recheck": False, "discover": True},
+        )
+        run_id = created.json()["data"]["run_id"]
+
+        latest = client.get("/api/v1/job-maintenance/latest").json()["data"]
+
+    assert latest["id"] == run_id
+    assert latest["kind"] == "discover"
+    assert latest["status"] in {"queued", "running"}
+
+
+def test_discover_depth_maps_to_per_company_and_keywords(
+    db_session: Session, settings: Settings, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "job_discover_keywords", "大模型,算法,后端,前端,数据")
+    monkeypatch.setattr(settings, "job_discover_max_keywords", 10)
+    monkeypatch.setattr(settings, "job_discover_max_per_company", 100)
+    service = JobMaintenanceService(db_session, settings)
+
+    quick = service._discover_plan({}, {"discover_depth": "quick"})
+    standard = service._discover_plan({}, {"discover_depth": "standard"})
+    deep = service._discover_plan({}, {"discover_depth": "deep"})
+
+    assert quick == (10, [None])
+    assert standard == (30, [None, "大模型", "算法"])
+    assert deep[0] == 50
+    assert deep[1] == [None, "大模型", "算法", "后端", "前端", "数据"]
+
+
+def test_explicit_query_wins_over_the_keyword_matrix(
+    db_session: Session, settings: Settings
+) -> None:
+    service = JobMaintenanceService(db_session, settings)
+
+    _, queries = service._discover_plan({"q": "大模型"}, {"discover_depth": "deep"})
+
+    assert queries == ["大模型"]
+
+
+def test_depth_budget_is_capped_by_configuration(
+    db_session: Session, settings: Settings, monkeypatch
+) -> None:
+    monkeypatch.setattr(settings, "job_discover_max_per_company", 20)
+    monkeypatch.setattr(settings, "job_discover_max_keywords", 2)
+    service = JobMaintenanceService(db_session, settings)
+
+    per_company, queries = service._discover_plan({}, {"discover_depth": "deep"})
+
+    assert per_company == 20
+    assert len(queries) == 2
+
+
+def test_recheck_keeps_the_stored_title_when_the_page_title_is_a_site_name(
+    db_session, settings: Settings, monkeypatch
+) -> None:
+    """SPA pages report "京东校招" as document title; that must not rename a job."""
+    job = create_job(db_session, title="算法工程师-数据挖掘", source_job_id="jd-title-1")
+
+    def fake_read(self, target: Job) -> dict:
+        return {
+            "status": JobStatus.OPEN,
+            "title": "京东校招",
+            "description": "工作内容：负责数据挖掘。" * 20,
+            "city": None,
+            "location_text": None,
+            "job_type": None,
+            "evidence": "读到官方详情正文",
+        }
+
+    monkeypatch.setattr(JobMaintenanceService, "_read_page", fake_read)
+
+    JobMaintenanceService(db_session, settings)._recheck_one(job)
+
+    db_session.refresh(job)
+    assert job.title == "算法工程师-数据挖掘"
+    assert len(job.description or "") > 100
+
+
+def test_verify_leads_run_covers_pending_candidates_of_a_company(
+    db_session, settings: Settings, monkeypatch
+) -> None:
+    """One click verifies every pending candidate; one failure must not stop it."""
+    from types import SimpleNamespace
+
+    from app.core.errors import AppError
+    from app.db.models.enums import JobSourceMethod, LeadVerificationStatus
+    from app.db.models.job import Company
+    from app.db.models.job_lead import JobLead
+    from app.services.job_lead_service import JobLeadService
+
+    company = Company(name="阿里巴巴", normalized_name="阿里巴巴-verify-leads")
+    db_session.add(company)
+    db_session.flush()
+    good = JobLead(
+        company_id=company.id,
+        title="可核验候选",
+        official_url="https://campus-talent.alibaba.com/campus/position/1",
+        source_method=JobSourceMethod.SEARCH_DISCOVERY,
+        verification_status=LeadVerificationStatus.SEARCH_SNIPPET_ONLY,
+        dedupe_key="verify-leads-1",
+    )
+    bad = JobLead(
+        company_id=company.id,
+        title="不可核验候选",
+        official_url="https://campus-talent.alibaba.com/campus/position/2",
+        source_method=JobSourceMethod.SEARCH_DISCOVERY,
+        verification_status=LeadVerificationStatus.USER_PROVIDED,
+        dedupe_key="verify-leads-2",
+    )
+    db_session.add_all([good, bad])
+    db_session.commit()
+
+    def fake_verify(self, lead_id, user_id):
+        if lead_id == good.id:
+            return SimpleNamespace(title=good.title), None
+        raise AppError("INVALID_SOURCE_URL", "该链接不是可信职位详情页", status_code=422)
+
+    monkeypatch.setattr(JobLeadService, "_verify_lead", fake_verify)
+
+    user = _user(db_session, "verify-leads@example.com")
+    service = _service(db_session, settings)
+    run, created = service.create_run(
+        user,
+        kind="verify_leads",
+        scope={"companies": ["阿里巴巴"]},
+        options={"limit": 10},
+    )
+    assert created is True
+
+    service.execute_verify_leads(run.id)
+
+    stored = db_session.get(JobMaintenanceRun, run.id)
+    counters = stored.result_json["counters"]
+    assert stored.status == "partial"
+    assert counters["verified"] == 1
+    assert counters["failed"] == 1
+    outcomes = {item["lead_id"]: item["outcome"] for item in stored.result_json["items"]}
+    assert outcomes[str(good.id)] == "verified"
+    assert outcomes[str(bad.id)] == "failed"
+
+
+def test_pending_lead_count_ignores_verified_and_other_users(
+    db_session, settings: Settings
+) -> None:
+    from app.db.models.enums import JobSourceMethod, LeadVerificationStatus
+    from app.db.models.job import Company
+    from app.db.models.job_lead import JobLead
+
+    company = Company(name="阿里巴巴", normalized_name="阿里巴巴-pending-count")
+    db_session.add(company)
+    db_session.flush()
+    owner = _user(db_session, "pending-owner@example.com")
+    other = _user(db_session, "pending-other@example.com")
+
+    db_session.add_all(
+        [
+            JobLead(
+                company_id=company.id,
+                title="公共候选",
+                official_url="https://campus-talent.alibaba.com/campus/position/10",
+                source_method=JobSourceMethod.SEARCH_DISCOVERY,
+                verification_status=LeadVerificationStatus.SEARCH_SNIPPET_ONLY,
+                dedupe_key="pc-1",
+            ),
+            JobLead(
+                company_id=company.id,
+                title="自己的导入",
+                owner_user_id=owner.id,
+                official_url="https://campus-talent.alibaba.com/campus/position/11",
+                source_method=JobSourceMethod.MANUAL_IMPORT,
+                verification_status=LeadVerificationStatus.USER_PROVIDED,
+                dedupe_key="pc-2",
+            ),
+            JobLead(
+                company_id=company.id,
+                title="别人的导入",
+                owner_user_id=other.id,
+                official_url="https://campus-talent.alibaba.com/campus/position/12",
+                source_method=JobSourceMethod.MANUAL_IMPORT,
+                verification_status=LeadVerificationStatus.USER_PROVIDED,
+                dedupe_key="pc-3",
+            ),
+            JobLead(
+                company_id=company.id,
+                title="已核验",
+                official_url="https://campus-talent.alibaba.com/campus/position/13",
+                source_method=JobSourceMethod.SEARCH_DISCOVERY,
+                verification_status=LeadVerificationStatus.VERIFIED_OFFICIAL,
+                dedupe_key="pc-4",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    count = _service(db_session, settings).pending_lead_count(owner.id, ["阿里巴巴"])
+
+    assert count == 2  # public + own, excluding other users' and verified ones
+
+
+def test_cancel_closes_a_run_left_running_by_a_dead_worker(db_session, settings: Settings) -> None:
+    """A container restart leaves runs in `running`; cancel must clean them up."""
+    user = _user(db_session, "cancel-zombie@example.com")
+    service = _service(db_session, settings)
+    run, _ = service.create_run(user, kind="refresh", scope={}, options={"max_jobs": 1})
+    run.status = "running"
+    run.started_at = datetime.now(UTC) - __import__("datetime").timedelta(minutes=30)
+    db_session.commit()
+
+    cancelled = service.cancel(run.id)
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.finished_at is not None
+    assert cancelled.cancel_requested_at is not None
+
+
+def _make_leads(db_session, count: int, company_name: str, prefix: str) -> None:
+    from sqlalchemy import select as sa_select
+
+    from app.db.models.enums import JobSourceMethod, LeadVerificationStatus
+    from app.db.models.job import Company
+    from app.db.models.job_lead import JobLead
+
+    company = db_session.scalar(sa_select(Company).where(Company.name == company_name))
+    if company is None:
+        company = Company(name=company_name, normalized_name=f"{company_name}-{prefix}")
+        db_session.add(company)
+        db_session.flush()
+    for index in range(count):
+        db_session.add(
+            JobLead(
+                company_id=company.id,
+                title=f"{prefix}-{index}",
+                official_url=f"https://campus-talent.alibaba.com/campus/position/{prefix}{index}",
+                source_method=JobSourceMethod.SEARCH_DISCOVERY,
+                verification_status=LeadVerificationStatus.SEARCH_SNIPPET_ONLY,
+                dedupe_key=f"{prefix}-{index}",
+            )
+        )
+    db_session.commit()
+
+
+def test_verify_leads_without_limit_covers_every_pending_candidate(
+    db_session, settings: Settings, monkeypatch
+) -> None:
+    """「全选」must not be quietly capped by the old 200-item bound."""
+    from types import SimpleNamespace
+
+    from app.services.job_lead_service import JobLeadService
+
+    _make_leads(db_session, 3, "阿里巴巴", "all")
+    monkeypatch.setattr(
+        JobLeadService,
+        "_verify_lead",
+        lambda self, lead_id, user_id: (SimpleNamespace(title="x"), None),
+    )
+
+    user = _user(db_session, "verify-all@example.com")
+    service = _service(db_session, settings)
+    run, _ = service.create_run(
+        user, kind="verify_leads", scope={"companies": ["阿里巴巴"]}, options={}
+    )
+    service.execute_verify_leads(run.id)
+
+    stored = db_session.get(JobMaintenanceRun, run.id)
+    assert stored.progress_json["total"] == 3
+    assert stored.result_json["counters"]["verified"] == 3
+
+
+def test_verify_leads_limit_caps_the_batch(db_session, settings: Settings, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.services.job_lead_service import JobLeadService
+
+    _make_leads(db_session, 3, "阿里巴巴", "cap")
+    monkeypatch.setattr(
+        JobLeadService,
+        "_verify_lead",
+        lambda self, lead_id, user_id: (SimpleNamespace(title="x"), None),
+    )
+
+    user = _user(db_session, "verify-cap@example.com")
+    service = _service(db_session, settings)
+    run, _ = service.create_run(
+        user, kind="verify_leads", scope={"companies": ["阿里巴巴"]}, options={"limit": 2}
+    )
+    service.execute_verify_leads(run.id)
+
+    stored = db_session.get(JobMaintenanceRun, run.id)
+    assert stored.progress_json["total"] == 2
+    assert len(stored.result_json["items"]) == 2

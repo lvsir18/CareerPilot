@@ -44,7 +44,9 @@ from app.core.errors import AppError
 from app.db.models.job import JobSource
 from app.services.job_ingestion import upsert_raw_job
 
-MAX_LIMIT = 10
+# Per-company ceiling for one crawl. The maintenance "discover" depth selects
+# 10/30/50; capping at 10 silently made the deeper modes identical to 快速.
+MAX_LIMIT = 100
 CACHE_TTL_SECONDS = 600
 
 _cache: dict[tuple[str, str], tuple[float, list[RawJob]]] = {}

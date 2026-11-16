@@ -183,3 +183,23 @@ def lead_to_read(lead: JobLead) -> JobLeadRead:
         source_kind=source_kind,
         url_type=inspected.url_type if inspected else "unverified",
     )
+
+
+class LeadVerifyBatchRequest(BaseModel):
+    """Batch verification for the candidate list (one click, many leads)."""
+
+    lead_ids: list[UUID] = Field(min_length=1, max_length=20)
+
+
+class LeadVerifyItem(BaseModel):
+    lead_id: str
+    status: str
+    title: str | None = None
+    error: str | None = None
+
+
+class LeadVerifyBatchResult(BaseModel):
+    requested: int
+    verified: int
+    failed: int
+    results: list[LeadVerifyItem] = Field(default_factory=list)

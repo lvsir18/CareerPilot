@@ -17,7 +17,7 @@ const api = vi.hoisted(() => ({
   cancelJobMaintenance: vi.fn(),
   previewJobPrune: vi.fn(),
   getOfficialSources: vi.fn(),
-  getActivity: vi.fn(),
+  getLatestJobMaintenance: vi.fn(),
 }));
 
 vi.mock("@/lib/client-api", async (original) => ({ ...(await original<object>()), ...api }));
@@ -39,10 +39,7 @@ const sourceCatalog = [
 beforeEach(() => {
   vi.clearAllMocks();
   api.getOfficialSources.mockResolvedValue({ ok: true, data: sourceCatalog });
-  api.getActivity.mockResolvedValue({
-    ok: true,
-    data: { job_maintenance: null, agent: null },
-  });
+  api.getLatestJobMaintenance.mockResolvedValue({ ok: true, data: null });
   api.previewJobPrune.mockResolvedValue({
     ok: true,
     data: {
@@ -147,5 +144,44 @@ describe("岗位库维护面板", () => {
     expect(await screen.findByText(/内容未变/)).toBeVisible();
     expect(screen.getByText(/3 \/ 10/)).toBeVisible();
     expect(screen.getByRole("button", { name: "取消任务" })).toBeInTheDocument();
+  });
+
+  it("提交后关闭弹窗，进度面板直接可见", async () => {
+    render(
+      <JobMaintenancePanel scope={scope} total={12} isAdmin={false} archivedView={false} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "更新岗位" }));
+    expect(screen.getByRole("button", { name: "开始" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "开始" }));
+
+    // The dialog is only a launcher; leaving it open hid the progress it started.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "开始" })).toBeNull());
+    expect(await screen.findByText(/内容未变/)).toBeVisible();
+  });
+
+  it("进入页面时恢复最近一次运行结果", async () => {
+    api.getLatestJobMaintenance.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "run-old",
+        kind: "discover",
+        status: "success",
+        progress: { total: 50, processed: 50, counters: { unchanged: 50 } },
+        result: { counters: { unchanged: 50 } },
+        error_message: null,
+        created_at: "2026-11-16T02:00:00Z",
+        started_at: "2026-11-16T02:00:01Z",
+        finished_at: "2026-11-16T02:00:04Z",
+      },
+    });
+
+    render(
+      <JobMaintenancePanel scope={scope} total={12} isAdmin={false} archivedView={false} />,
+    );
+
+    expect(await screen.findByText(/更新岗位 · success/)).toBeVisible();
+    expect(screen.getByText(/50 \/ 50/)).toBeVisible();
   });
 });

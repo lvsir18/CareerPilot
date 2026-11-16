@@ -288,3 +288,56 @@ def test_safe_http_rechecks_dns_resolution_on_each_validation(
         # A second resolution cannot silently switch to loopback.
         client._validate_url("https://example.com/jobs")
     client.close()
+
+
+def test_site_specific_department_and_time_fields_are_mapped() -> None:
+    """Each site names 部门/发布时间 differently; the library used to show blanks."""
+    from app.connectors.rendered import DEPARTMENT_KEYS, _pick, _published_at
+
+    bytedance = {
+        "job_category": "研发",
+        "job_function": "后端",
+        "publish_time": "2026-11-01",
+    }
+    assert _pick(bytedance, DEPARTMENT_KEYS) == "研发"
+    assert _published_at(bytedance) is not None
+
+    xiaohongshu = {"directionName": "技术", "subDirectionName": "后端", "publishTime": "2026-10-20"}
+    assert _pick(xiaohongshu, DEPARTMENT_KEYS) == "技术"
+
+    meituan = {
+        "department": "到家事业群",
+        "jobFamily": "研发",
+        "firstPostTime": "2026-09-01 10:00:00",
+    }
+    assert _pick(meituan, DEPARTMENT_KEYS) == "到家事业群"
+    published = _published_at(meituan)
+    assert published is not None and published.month == 9
+
+    # ``department`` wins over the coarser family/category fields.
+    assert _pick(meituan, DEPARTMENT_KEYS) != "研发"
+
+
+def test_page_labels_supply_department_and_publish_date() -> None:
+    """Ali/Meituan show 在招业务/部门 and 更新于/更新时间 as plain labels."""
+    from app.connectors.rendered_page import _labeled_fields, _parse_label_date
+
+    alibaba = (
+        "AI Agent算法工程师\n更新于 2026-03-26\n杭州\n基础信息\n职位类别\n技术类\n"
+        "招聘项目\n阿里巴巴日常实习生\n在招业务\n淘天集团"
+    )
+    fields = _labeled_fields(alibaba)
+    assert fields["published_at"] == "2026-03-26"
+    assert fields["department"] == "淘天集团"
+    assert fields["recruitment_program"] == "阿里巴巴日常实习生"
+    assert fields["job_category"] == "技术类"
+
+    meituan = "更新时间：2026/11/16\n工作地点：北京市\n部门：软硬件服务-软件研发部"
+    meituan_fields = _labeled_fields(meituan)
+    assert meituan_fields["department"] == "软硬件服务-软件研发部"
+    assert meituan_fields["city"] == "北京市"
+    assert _parse_label_date(meituan_fields["published_at"]) is not None
+
+    assert _parse_label_date("2026-03-26").day == 26
+    assert _parse_label_date("2026年11月16日").month == 11
+    assert _parse_label_date("无") is None
