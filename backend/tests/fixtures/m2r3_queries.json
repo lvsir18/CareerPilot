@@ -1,0 +1,252 @@
+[
+  {
+    "id": "q01",
+    "query": "Agent 实习",
+    "companies": [
+      "baidu"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q02",
+    "query": "Agent 大模型 实习",
+    "companies": [
+      "bytedance"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q03",
+    "query": "大模型 算法 校招",
+    "companies": [
+      "tencent"
+    ],
+    "city": "深圳",
+    "job_type": "campus",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q04",
+    "query": "搜索算法 校招",
+    "companies": [
+      "alibaba"
+    ],
+    "city": "北京",
+    "job_type": "campus",
+    "job_family": "algorithm_data"
+  },
+  {
+    "id": "q05",
+    "query": "大模型 实习",
+    "companies": [
+      "meituan"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q06",
+    "query": "大模型 算法 实习",
+    "companies": [
+      "xiaohongshu"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q07",
+    "query": "推荐算法 实习生 招聘",
+    "companies": [
+      "bilibili"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "algorithm_data"
+  },
+  {
+    "id": "q08",
+    "query": "数据分析 实习",
+    "companies": [
+      "dewu"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "algorithm_data"
+  },
+  {
+    "id": "q09",
+    "query": "大模型 实习",
+    "companies": [
+      "deepseek"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q10",
+    "query": "算法 实习",
+    "companies": [
+      "360"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "algorithm_data"
+  },
+  {
+    "id": "q11",
+    "query": "校园招聘 大模型 算法",
+    "companies": [
+      "xiaomi"
+    ],
+    "city": "北京",
+    "job_type": "campus",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q12",
+    "query": "大模型 实习",
+    "companies": [
+      "minimax"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q13",
+    "query": "后端 实习",
+    "companies": [
+      "bytedance"
+    ],
+    "city": "深圳",
+    "job_type": "internship",
+    "job_family": "backend"
+  },
+  {
+    "id": "q14",
+    "query": "产品 实习",
+    "companies": [
+      "tencent"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "product"
+  },
+  {
+    "id": "q15",
+    "query": "前端 实习",
+    "companies": [
+      "alibaba"
+    ],
+    "city": "杭州",
+    "job_type": "internship",
+    "job_family": "frontend"
+  },
+  {
+    "id": "q16",
+    "query": "数据分析 实习",
+    "companies": [
+      "meituan"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "algorithm_data"
+  },
+  {
+    "id": "q17",
+    "query": "产品 实习",
+    "companies": [
+      "xiaohongshu"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "product"
+  },
+  {
+    "id": "q18",
+    "query": "运营 实习",
+    "companies": [
+      "bilibili"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "operations"
+  },
+  {
+    "id": "q19",
+    "query": "后端 校招",
+    "companies": [
+      "jd"
+    ],
+    "city": "北京",
+    "job_type": "campus",
+    "job_family": "backend"
+  },
+  {
+    "id": "q20",
+    "query": "推荐算法 实习",
+    "companies": [
+      "kuaishou"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "algorithm_data"
+  },
+  {
+    "id": "q21",
+    "query": "大模型 实习 招聘",
+    "companies": [
+      "kimi"
+    ],
+    "city": "北京",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q22",
+    "query": "后端 开发 实习",
+    "companies": [
+      "ctrip"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "backend"
+  },
+  {
+    "id": "q23",
+    "query": "大模型 算法 实习",
+    "companies": [
+      "netease"
+    ],
+    "city": "杭州",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q24",
+    "query": "大模型 算法 实习",
+    "companies": [
+      "huawei"
+    ],
+    "city": "深圳",
+    "job_type": "internship",
+    "job_family": "llm_agent"
+  },
+  {
+    "id": "q25",
+    "query": "后端 开发 实习",
+    "companies": [
+      "pdd"
+    ],
+    "city": "上海",
+    "job_type": "internship",
+    "job_family": "backend"
+  }
+]

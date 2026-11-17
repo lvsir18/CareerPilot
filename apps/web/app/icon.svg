@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="CareerPilot 头像：未闭合的白色航迹环，一支琥珀色箭头从右上缺口射出">
+  <defs>
+    <linearGradient id="cp-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2C5FE0"/>
+      <stop offset="1" stop-color="#4A88FF"/>
+    </linearGradient>
+    <radialGradient id="cp-sheen" cx="0.18" cy="0.08" r="0.92">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="cp-squircle"><rect width="1024" height="1024" rx="228"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#cp-squircle)">
+    <rect width="1024" height="1024" fill="url(#cp-bg)"/>
+    <rect width="1024" height="1024" fill="url(#cp-sheen)"/>
+
+    <!-- 未闭合的航迹环：C 的开口 = 流程仍在进行中 -->
+    <path d="M 751.6 490.3 A 242 242 0 1 1 503.6 282.1"
+          fill="none" stroke="#F5F9FF" stroke-width="106" stroke-linecap="round"/>
+
+    <!-- agent 替你盯着的下一步：唯一的信号色 -->
+    <g transform="translate(512 524) rotate(-50)">
+      <path d="M 258 -18 L 366 -18 L 366 -54 L 452 0 L 366 54 L 366 18 L 258 18 Z"
+            fill="#FFC53D"/>
+    </g>
+
+    <rect x="1.5" y="1.5" width="1021" height="1021" rx="226.5"
+          fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="3"/>
+  </g>
+</svg>

@@ -1,0 +1,46 @@
+# Shared image for the API and the Celery worker.
+FROM python:3.14-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN groupadd --system --gid 1001 app \
+    && useradd --system --uid 1001 --gid app --home-dir /app app
+
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Headless Chromium for official-source rendering (SPA career sites sign their
+# XHRs in the browser, so the request has to originate from a real page).
+# CJK fonts are installed because some sites gate content on rendered text.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# The Debian mirrors occasionally drop a connection mid-install, which fails the
+# whole image build. Retry the layer a few times before giving up.
+RUN set -eux; \
+    ok=0; \
+    for attempt in 1 2 3 4 5; do \
+        if apt-get update -o Acquire::Retries=8 \
+            && playwright install --with-deps chromium \
+            && apt-get install -y --no-install-recommends -o Acquire::Retries=8 fonts-noto-cjk; then \
+            ok=1; break; \
+        fi; \
+        echo "playwright dependency install failed (attempt ${attempt}), retrying"; \
+        rm -rf /var/lib/apt/lists/*; \
+        sleep 10; \
+    done; \
+    [ "$ok" = "1" ]; \
+    rm -rf /var/lib/apt/lists/*; \
+    chmod -R 755 /ms-playwright; \
+    find /ms-playwright -maxdepth 3 -type f -name chrome | head -n 1 | grep -q .
+
+COPY --chown=app:app backend/ ./
+RUN mkdir -p /app/uploads && chown -R app:app /app/uploads && chmod 750 /app/uploads
+
+USER app
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
