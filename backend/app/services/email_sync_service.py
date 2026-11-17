@@ -7,7 +7,7 @@ Gmail and manual import share one business pipeline.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -191,6 +191,28 @@ class ConflictDetectionService:
 
 
 class EmailSyncService:
+    def reconcile_stale_runs(self, minutes: int = 10) -> int:
+        """Close runs a restarted/crashed worker left in ``running``.
+
+        ``finally`` never executes when the process is killed, so a container
+        restart leaves the settings page showing "同步中" forever — which reads
+        as "this mailbox stopped working".
+        """
+        cutoff = datetime.now(UTC) - timedelta(minutes=minutes)
+        stale = self._session.scalars(
+            select(MailboxSyncRun).where(
+                MailboxSyncRun.status == "running",
+                MailboxSyncRun.started_at < cutoff,
+            )
+        ).all()
+        for run in stale:
+            run.status = "failed"
+            run.finished_at = datetime.now(UTC)
+            run.error_summary = (run.error_summary or "任务中断（服务重启或超时）")[:1000]
+        if stale:
+            self._session.commit()
+        return len(stale)
+
     def __init__(self, session: Session, settings: Settings) -> None:
         self._session = session
         self._settings = settings

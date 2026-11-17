@@ -239,3 +239,38 @@ def test_mailbox_is_user_scoped(
         register_user(client_b, email="mailbox-b@example.com")
         assert client_b.get("/api/v1/mailboxes").json()["data"] == []
         assert client_b.post(f"/api/v1/mailboxes/{mailbox['id']}/sync").status_code == 404
+
+
+def test_stale_running_sync_run_is_closed(db_session: Session, settings: Settings) -> None:
+    """A worker restart leaves runs in `running`; the page then says "同步中" forever."""
+    from app.db.models.mailbox import MailboxConnection, MailboxSyncRun
+    from app.db.models.user import User
+    from app.services.email_sync_service import EmailSyncService
+
+    user = User(email="stale-run@example.com", password_hash="x")
+    db_session.add(user)
+    db_session.flush()
+    connection = MailboxConnection(
+        user_id=user.id,
+        provider="gmail",
+        email_address="stale-run@example.com",
+        status="active",
+        sync_enabled=True,
+    )
+    db_session.add(connection)
+    db_session.flush()
+    stale = MailboxSyncRun(
+        connection_id=connection.id,
+        started_at=datetime.now(UTC) - timedelta(minutes=30),
+        status="running",
+    )
+    db_session.add(stale)
+    db_session.commit()
+
+    closed = EmailSyncService(db_session, settings).reconcile_stale_runs()
+
+    assert closed == 1
+    db_session.refresh(stale)
+    assert stale.status == "failed"
+    assert stale.finished_at is not None
+    assert "任务中断" in (stale.error_summary or "")

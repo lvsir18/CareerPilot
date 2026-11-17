@@ -1,0 +1,70 @@
+name: Bug 报告
+description: 某个功能没按预期工作
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先确认：
+        - 已经看过 `/guide`（使用手册）与 `docs/USER_GUIDE.md`；
+        - 用 `docker compose logs api worker --tail 100` 看过有没有明显报错；
+        - 安全相关问题**不要**在这里开 issue，请走 SECURITY.md。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 实际行为 + 你期望的行为
+      placeholder: 点「更新岗位」后进度一直停在 0，期望 3 秒内开始计数。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 /jobs
+        2. 点「更新岗位」，勾选复核 + 发现新增，深度选标准
+        3. 点「开始」
+        4. 进度面板显示 0 / 0，10 分钟没变化
+    validations:
+      required: true
+
+  - type: input
+    id: page
+    attributes:
+      label: 所在页面 / 接口
+      placeholder: /discover 或 POST /api/v1/job-maintenance
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或错误码
+      description: 接口返回体里的 `code`、或日志里的 `request_id` 都很有用
+      render: shell
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影响范围
+      options:
+        - 岗位抓取 / 解析
+        - 岗位维护（复核 / 发现 / 归档）
+        - 候选核验
+        - 简历与画像
+        - 匹配与推荐
+        - Agent 工作台
+        - 邮件同步 / 投递看板
+        - 登录 / 权限
+        - 部署 / 配置
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 镜像标签或提交哈希（`git rev-parse --short HEAD`）
+      placeholder: 1a2b3c4

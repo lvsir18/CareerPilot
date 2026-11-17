@@ -304,7 +304,7 @@ def run_cases(probe: Probe, cases: list[Case], keep: bool) -> list[Outcome]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agent 场景回归探针")
-    parser.add_argument("--email", default="lvxujie@example.com")
+    parser.add_argument("--email", default="demo@example.com")
     parser.add_argument("--group", default="routing", choices=[*GROUPS, "all"])
     parser.add_argument("--keep", action="store_true", help="保留会话，便于在 Web 回看")
     args = parser.parse_args()

@@ -1,0 +1,46 @@
+name: 功能建议
+description: 想要新增或改进的能力
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前可以对照 `docs/IMPLEMENTATION_STATUS.md` 的「已知限制 / 路线图」，
+        有些能力是**有意不做**的（例如自动投递、绕验证码、保存平台密码）。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 描述场景，而不是直接给方案
+      placeholder: 每次投递后要手动记时间，希望在 Agent 里一句话就能补记。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你设想的做法
+      placeholder: Agent 增加一个工具，识别「我昨天投了 XX 公司」并写入投递时间线。
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你考虑过的替代方案
+      description: 现在是怎么绕过去的
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及模块
+      options:
+        - 岗位抓取 / 解析
+        - 岗位维护
+        - 匹配算法
+        - Agent / 工具
+        - 前端界面
+        - 邮件与投递
+        - 部署与配置
+        - 文档
+    validations:
+      required: true

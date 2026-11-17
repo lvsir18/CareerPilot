@@ -35,16 +35,18 @@ def reconcile_agent_runs() -> dict[str, Any]:
     Celery message is re-delivered but ``claim()`` only accepts ``queued``.
     """
     from app.agents.run_service import AgentRunService
+    from app.services.email_sync_service import EmailSyncService
 
     with session_scope() as session:
         fixed = AgentRunService(session).reconcile_stale_runs()
+        mailbox_runs = EmailSyncService(session, get_settings()).reconcile_stale_runs()
     # A run left behind by a dying worker is re-queued, not failed: re-dispatch
     # it so the user's question still gets answered after a restart.
     requeued = [item["run_id"] for item in fixed if item.get("status") == "requeued"]
     for run_id in requeued:
         with suppress(Exception):
             run_agent_run.delay(run_id)
-    return {"reconciled": fixed, "requeued": len(requeued)}
+    return {"reconciled": fixed, "requeued": len(requeued), "mailbox_runs": mailbox_runs}
 
 
 @celery_app.task(

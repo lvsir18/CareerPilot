@@ -1,6 +1,90 @@
-# CareerPilot · 智能求职 Agent
+# CareerPilot · 求职工作台
 
-面向国内互联网实习 / 校招的岗位搜索、简历画像、可解释匹配与多 Agent 求职工作流。
+<p align="center">
+  <img src="apps/web/public/careerpilot-avatar.svg" width="88" alt="CareerPilot" />
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f.svg" /></a>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white" />
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white" />
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" />
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" />
+</p>
+
+<p align="center">
+  把求职从「海投」变成一条<b>可核验</b>的流程：岗位来自官网、匹配给依据、任务可恢复，数据全在你自己机器上。
+</p>
+
+---
+
+## 它解决什么问题
+
+| 常见做法 | 这里怎么做 |
+|---|---|
+| 招聘 App 里的岗位信息真假难辨 | 只收录**读到官方详情页**的岗位；抓不到的链接只作为「候选」，不会伪装成正式岗位 |
+| 匹配分数是黑盒 | 规则化比对，每一分都能对应到「符合哪些技能、缺哪些技能」 |
+| 爬虫跑一半断掉，状态就丢了 | 所有长任务进队列，支持进度恢复、协作式取消、断点续跑与冷却 |
+| 多个账号共用一个 Key，额度互相消耗 | 每个账号可配置自己的模型 / 搜索 Key，服务端默认 Key 只给管理员 |
+| 简历、面试信息散落各处 | 简历画像 → 岗位匹配 → 投递看板 → 面试日历，一条线打通 |
+
+## 核心能力
+
+- **岗位获取**：7 家企业官网直连（腾讯、京东走官方接口；字节、小红书、美团、B站、MiniMax 走渲染 / ATS），
+  其余企业可用官方链接导入；页面上的部门、更新时间、招聘项目都会被解析；
+- **岗位维护**：手动触发复核（增量扫描 + 6 小时冷却）、发现新增（可调深度与关键词矩阵）、
+  下线判定（只认明确标记）与软归档；
+- **候选核验**：搜索 / 导入得到的候选链接，可单条或按企业一键核验，后台队列执行、可取消；
+- **画像与匹配**：PDF/DOCX 简历解析 → 确认画像 → 可解释打分（未确认不给分）；
+- **Agent 工作台**：LangGraph Supervisor + 专业 Agent + 受限工具，支持多轮追问、SSE 实时进度、
+  断线续传与 300 秒硬超时；
+- **投递跟进**：邮件（Gmail OAuth / QQ IMAP）识别面试与测评，进入看板、日历与申请时间线；
+- **多端**：响应式 Web，手机用同一 Wi-Fi 或 Tailscale 直接打开。
+
+## 快速开始
+
+```bash
+git clone <repo-url> careerpilot && cd careerpilot
+cp .env.example .env          # 至少改 SESSION_SECRET / POSTGRES_PASSWORD / MAILBOX_SECRET_KEY
+docker compose up -d --build
+docker compose exec api alembic upgrade head
+```
+
+打开 <http://localhost:3000> 注册账号。想把某个账号设为管理员（清理下线、跨账号维护需要）：
+
+```bash
+# .env
+ADMIN_EMAILS=you@example.com
+docker compose restart api worker
+```
+
+模型与搜索 Key 可以只配在设置页（每个账号独立），也可以在 `.env` 配一份服务端默认值。
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | 完整使用手册（Markdown 版） |
+| `/guide`（界面内） | 图文手册，16 章，含自部署与配置速查 |
+| [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) | 每个功能的实现记录、验证方式与已知限制 |
+| [`AGENTS.md`](AGENTS.md) | 代码约定、目录职责、测试要求（二次开发先读） |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 如何提 PR、如何新增一家企业直连 |
+| [`SECURITY.md`](SECURITY.md) | 漏洞报告方式与部署加固建议 |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | 行为准则 |
+
+## 边界（有意不做）
+
+- 不自动投递、不代填表单、不绕验证码；
+- 不保存招聘平台账号密码；
+- 抓取失败不会判定岗位「已下线」，只记为「无法确认」；
+- 没有 PWA / 原生 App，移动端是响应式 Web。
+
+## 许可
+
+[MIT](LICENSE)。欢迎 issue 与 PR，尤其是「新增一家企业直连」这类贡献。
+
+---
+
 
 > **当前状态：M1–M6 完成（个人版）——可视化工作台 + 异步 LangGraph Agent + SSE + QQ/Gmail 同步 + 本地备份恢复。**
 > 已具备账号认证（限流 + CSRF）、用户隔离、岗位库、收藏、待投递清单、个人申请时间线，
