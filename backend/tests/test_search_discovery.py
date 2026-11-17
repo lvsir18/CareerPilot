@@ -149,7 +149,7 @@ def test_search_rate_limit_stops_extra_calls() -> None:
     second = service.search("second", company_keys=["baidu"])
 
     assert second.hits == []
-    assert any("频率" in warning for warning in second.warnings)
+    assert any("每分钟最多" in warning for warning in second.warnings)
     assert calls["count"] == 1
 
 

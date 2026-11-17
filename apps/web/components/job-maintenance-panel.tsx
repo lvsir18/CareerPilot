@@ -6,6 +6,7 @@ import { Archive, RefreshCw, X } from "lucide-react";
 
 import {
   cancelJobMaintenance,
+  getActivity,
   getJobMaintenance,
   getLatestJobMaintenance,
   getOfficialSources,
@@ -56,6 +57,7 @@ export function JobMaintenancePanel({
   const [recheck, setRecheck] = useState(true);
   const [discover, setDiscover] = useState(false);
   const [sources, setSources] = useState<OfficialSourceCompany[]>([]);
+  const [latestRun, setLatestRun] = useState<MaintenanceRun | null>(null);
   const [maxJobs, setMaxJobs] = useState(100);
   const [cooldownHours, setCooldownHours] = useState(6);
   const [discoverDepth, setDiscoverDepth] = useState<"quick" | "standard" | "deep">("standard");
@@ -81,14 +83,23 @@ export function JobMaintenancePanel({
     .filter((item) => !item.supported)
     .map((item) => item.label);
 
-  // Coming back to this page resumes a running sweep, or replays the last one.
-  // A discover-only run often finishes in seconds, so an empty panel after
-  // switching tabs looked like the click did nothing at all.
+  // Entering the page only re-attaches a *running* sweep. Past results stay
+  // collapsed behind 「上次更新结果」 — showing yesterday's log on every visit
+  // made the page look like it had just done something.
   useEffect(() => {
     let cancelled = false;
+    void getActivity().then(async (snapshot) => {
+      if (cancelled || !snapshot.ok || !snapshot.data.job_maintenance) {
+        return;
+      }
+      const result = await getJobMaintenance(snapshot.data.job_maintenance.run_id);
+      if (!cancelled && result.ok) {
+        setRun(result.data);
+      }
+    });
     void getLatestJobMaintenance().then((latest) => {
       if (!cancelled && latest.ok && latest.data) {
-        setRun(latest.data);
+        setLatestRun(latest.data);
       }
     });
     return () => {
@@ -161,6 +172,9 @@ export function JobMaintenancePanel({
     }
     const created = await getJobMaintenance(result.data.run_id);
     setRun(created.ok ? created.data : null);
+    if (created.ok) {
+      setLatestRun(created.data);
+    }
     setDialog(null);
   }
 
@@ -188,6 +202,16 @@ export function JobMaintenancePanel({
           <RefreshCw className="size-3.5" aria-hidden />
           更新岗位
         </button>
+        {latestRun && !run ? (
+          <button
+            type="button"
+            onClick={() => setRun(latestRun)}
+            className="text-xs text-slate-500 hover:underline"
+          >
+            上次更新结果
+            {latestRun.finished_at ? ` · ${formatDateTime(latestRun.finished_at)}` : ""}
+          </button>
+        ) : null}
         {isAdmin ? (
           <button
             type="button"

@@ -60,6 +60,9 @@ const JOB_FAMILY_LABELS: Record<string, string> = {
   operations: "运营 / 市场",
   other: "其他",
   // Legacy coarse filters, kept so old links/labels still read correctly.
+  ai: "AI / 算法",
+  engineering: "研发 / 工程",
+  product_design: "产品 / 设计",
   llm_agent: "LLM / Agent",
   algorithm_data: "算法 / 数据",
 };

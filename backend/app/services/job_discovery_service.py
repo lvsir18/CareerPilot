@@ -25,7 +25,7 @@ from app.schemas.leads import (
 from app.search.base import SearchOutcome
 from app.search.domains import COMPANY_NAMES, resolve_company
 from app.search.service import SearchService
-from app.search.taxonomy import classify_job_family, is_known_family, job_family_matches
+from app.search.taxonomy import classify_job_families, is_known_family, job_family_matches
 from app.services.job_lead_service import JobLeadService
 from app.services.job_service import JobService
 from app.services.user_search_service import (
@@ -344,7 +344,7 @@ class JobDiscoveryService:
             jobs = [
                 job
                 for job in jobs
-                if job_family_matches(classify_job_family(job.title, job.description), job_family)
+                if job_family_matches(classify_job_families(job.title, job.description), job_family)
             ]
         return jobs, total
 

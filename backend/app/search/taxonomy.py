@@ -49,6 +49,11 @@ JOB_FAMILY_LABELS = {
 JOB_FAMILY_GROUPS: dict[str, frozenset[str]] = {
     "llm_agent": frozenset({"llm", "agent"}),
     "algorithm_data": frozenset({"algorithm", "data"}),
+    # Umbrella for people who just want "AI 岗位": 大模型 / Agent / 算法 一起看。
+    "ai": frozenset({"llm", "agent", "algorithm"}),
+    # 大厂校招口径的大类：研发 / 工程 合并后端、前端、客户端与基础架构。
+    "engineering": frozenset({"backend", "frontend", "client", "infra"}),
+    "product_design": frozenset({"product", "design"}),
 }
 
 # Ordered: the first hit wins, so put narrow families before broad ones.
@@ -68,7 +73,20 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "security",
-        ("安全工程师", "安全研究", "渗透", "逆向", "漏洞", "风控算法", "应急响应", "security"),
+        (
+            "安全工程师",
+            "安全研究",
+            "安全攻防",
+            "攻防",
+            "数据安全",
+            "内容安全",
+            "渗透",
+            "逆向",
+            "漏洞",
+            "风控",
+            "应急响应",
+            "security",
+        ),
     ),
     (
         "agent",
@@ -188,14 +206,39 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def classify_job_family(title: str | None, summary: str | None = None) -> str:
-    text = f"{title or ''}\n{summary or ''}".casefold()
-    if not text.strip():
-        return "other"
+def classify_job_families(title: str | None, summary: str | None = None) -> list[str]:
+    """Every family this posting plausibly belongs to.
+
+    A posting is routinely several things at once — "大模型算法工程师" is both
+    ``llm`` and ``algorithm``. The old single-label classifier returned the first
+    hit while scanning the *JD* too, so one passing mention of 大模型 in the
+    description reclassified real algorithm roles and filtering by 算法 showed
+    almost nothing.
+
+    Rules:
+    - title hits are authoritative and may be multiple;
+    - the JD is only consulted when the title says nothing at all, and then only
+      the first (narrowest) hit is taken.
+    """
+    title_text = (title or "").casefold()
+    summary_text = (summary or "").casefold()
+    matched: list[str] = []
     for family, keywords in _RULES:
-        if any(keyword.casefold() in text for keyword in keywords):
-            return family
-    return "other"
+        if any(keyword.casefold() in title_text for keyword in keywords):
+            matched.append(family)
+    if matched:
+        return matched
+    if not summary_text.strip():
+        return ["other"]
+    for family, keywords in _RULES:
+        if any(keyword.casefold() in summary_text for keyword in keywords):
+            return [family]
+    return ["other"]
+
+
+def classify_job_family(title: str | None, summary: str | None = None) -> str:
+    """Primary label (first title match, else the JD match, else ``other``)."""
+    return classify_job_families(title, summary)[0]
 
 
 def is_known_family(value: str | None) -> bool:
@@ -203,10 +246,11 @@ def is_known_family(value: str | None) -> bool:
     return bool(value) and (value in JOB_FAMILIES or value in JOB_FAMILY_GROUPS)
 
 
-def job_family_matches(classified: str, requested: str | None) -> bool:
-    """True when a classified family satisfies the requested filter."""
+def job_family_matches(classified: str | list[str], requested: str | None) -> bool:
+    """True when any label on the posting satisfies the requested filter."""
     if not requested:
         return True
+    labels = [classified] if isinstance(classified, str) else list(classified)
     if requested in JOB_FAMILY_GROUPS:
-        return classified in JOB_FAMILY_GROUPS[requested]
-    return classified == requested
+        return any(label in JOB_FAMILY_GROUPS[requested] for label in labels)
+    return requested in labels

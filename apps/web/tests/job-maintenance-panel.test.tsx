@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   previewJobPrune: vi.fn(),
   getOfficialSources: vi.fn(),
   getLatestJobMaintenance: vi.fn(),
+  getActivity: vi.fn(),
 }));
 
 vi.mock("@/lib/client-api", async (original) => ({ ...(await original<object>()), ...api }));
@@ -40,6 +41,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getOfficialSources.mockResolvedValue({ ok: true, data: sourceCatalog });
   api.getLatestJobMaintenance.mockResolvedValue({ ok: true, data: null });
+  api.getActivity.mockResolvedValue({
+    ok: true,
+    data: { job_maintenance: null, agent: null },
+  });
   api.previewJobPrune.mockResolvedValue({
     ok: true,
     data: {
@@ -161,7 +166,7 @@ describe("岗位库维护面板", () => {
     expect(await screen.findByText(/内容未变/)).toBeVisible();
   });
 
-  it("进入页面时恢复最近一次运行结果", async () => {
+  it("进入页面不自动展开历史结果，点「上次更新结果」才显示", async () => {
     api.getLatestJobMaintenance.mockResolvedValue({
       ok: true,
       data: {
@@ -180,6 +185,12 @@ describe("岗位库维护面板", () => {
     render(
       <JobMaintenancePanel scope={scope} total={12} isAdmin={false} archivedView={false} />,
     );
+
+    // Yesterday's log must not greet the user on every visit.
+    await waitFor(() => expect(api.getLatestJobMaintenance).toHaveBeenCalled());
+    expect(screen.queryByText(/更新岗位 · success/)).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: /上次更新结果/ }));
 
     expect(await screen.findByText(/更新岗位 · success/)).toBeVisible();
     expect(screen.getByText(/50 \/ 50/)).toBeVisible();

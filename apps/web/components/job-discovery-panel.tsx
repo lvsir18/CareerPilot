@@ -79,23 +79,37 @@ const JOB_TYPES = [
   { value: "campus", label: "校招" },
 ];
 
+// 大厂校招口径的大类（不再细分到前端/客户端/SRE 这一级）。
+// 后端仍接受旧细分值，URL 里的老值会在这里归并到对应大类。
 const JOB_FAMILIES = [
   { value: "", label: "全部方向" },
-  { value: "llm", label: "大模型 / LLM" },
-  { value: "agent", label: "Agent / 应用" },
-  { value: "algorithm", label: "算法" },
+  { value: "ai", label: "AI / 算法（大模型 · Agent）" },
+  { value: "engineering", label: "研发 / 工程（后端 · 前端 · 客户端 · 架构）" },
   { value: "data", label: "数据" },
-  { value: "backend", label: "后端" },
-  { value: "infra", label: "基础架构 / SRE" },
-  { value: "frontend", label: "前端 / Web" },
-  { value: "client", label: "客户端" },
   { value: "test", label: "测试 / QA" },
   { value: "security", label: "安全" },
-  { value: "product", label: "产品" },
-  { value: "design", label: "设计" },
+  { value: "product_design", label: "产品 / 设计" },
   { value: "operations", label: "运营 / 市场" },
   { value: "other", label: "其他" },
 ];
+
+const FAMILY_GROUPS: Record<string, string[]> = {
+  ai: ["llm", "agent", "algorithm"],
+  engineering: ["backend", "frontend", "client", "infra"],
+  product_design: ["product", "design"],
+};
+
+function normalizeFamily(value: string): string {
+  if (!value) {
+    return "";
+  }
+  for (const [group, members] of Object.entries(FAMILY_GROUPS)) {
+    if (members.includes(value)) {
+      return group;
+    }
+  }
+  return value;
+}
 
 function formatCompany(company: string): string {
   const labels: Record<string, string> = {
@@ -128,14 +142,16 @@ function readUrlFilter(key: string): string | null {
 }
 
 export function JobDiscoveryPanel() {
-  const [query, setQuery] = useState(() => readUrlFilter("q") ?? "实习");
+  const [query, setQuery] = useState(() => readUrlFilter("q") ?? "");
   const [companies, setCompanies] = useState<string[]>(() => {
     const raw = readUrlFilter("companies");
     return raw ? raw.split(",").filter(Boolean) : DEFAULT_COMPANIES;
   });
   const [city, setCity] = useState(() => readUrlFilter("city") ?? "");
   const [jobType, setJobType] = useState(() => readUrlFilter("job_type") ?? "");
-  const [jobFamily, setJobFamily] = useState(() => readUrlFilter("job_family") ?? "");
+  const [jobFamily, setJobFamily] = useState(() =>
+    normalizeFamily(readUrlFilter("job_family") ?? ""),
+  );
   const [verification, setVerification] = useState(() => readUrlFilter("verification") ?? "all");
   const [publishedWithin, setPublishedWithin] = useState(() => readUrlFilter("published_within") ?? "");
   const [days, setDays] = useState(() => readUrlFilter("days") ?? "7");
@@ -154,6 +170,7 @@ export function JobDiscoveryPanel() {
   const [verifyAll, setVerifyAll] = useState(true);
   const [verifyLimit, setVerifyLimit] = useState(50);
   const [batchNotice, setBatchNotice] = useState<string | null>(null);
+  const [restoredHint, setRestoredHint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [officialKeyword, setOfficialKeyword] = useState(() => readUrlFilter("q") ?? "");
 
@@ -366,29 +383,26 @@ export function JobDiscoveryPanel() {
     await runSearch(result?.page ?? 1);
   }
 
-  // Coming back from a posting link: restore the previous search instead of an
-  // empty page, so results are not lost by a round trip to job detail.
+  // Entering the page restores the saved filters but does NOT search: every
+  // live search spends Tavily credits, and auto-running on mount meant that
+  // simply navigating here a few times exhausted the per-minute quota.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const savedQuery = params.get("q") ?? "";
     const savedCompanies = (params.get("companies") ?? "").split(",").filter(Boolean);
-    const savedPage = Number(params.get("page") ?? "1");
     if (!savedQuery && !savedCompanies.length) {
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot restore from the URL on mount
+    setRestoredHint("已恢复上次的筛选条件，点「搜索」继续");
     if (savedQuery) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot restore from the URL on mount
+       
       setQuery(savedQuery);
     }
     if (savedCompanies.length) {
        
       setCompanies(savedCompanies);
     }
-    void runSearch(Number.isFinite(savedPage) && savedPage > 0 ? savedPage : 1, {
-      query: savedQuery,
-      companies: savedCompanies.length ? savedCompanies : undefined,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- restore once on mount
   }, []);
 
   const TERMINAL_STATUSES = new Set(["success", "partial", "failed", "cancelled"]);
@@ -477,6 +491,16 @@ export function JobDiscoveryPanel() {
 
   return (
     <div className="space-y-6">
+      {!result && !busy ? (
+        <section className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center">
+          <p className="text-sm font-medium text-slate-700">进入页面不会自动检索</p>
+          <p className="mt-1 text-xs text-slate-500">
+            实时搜索会消耗 Tavily 额度：填好条件后点「搜索」才开始。
+            命中限流时本次会跳过（只返回岗位库里已有的结果），等一分钟再试即可。
+          </p>
+          {restoredHint ? <p className="mt-2 text-xs text-sky-700">{restoredHint}</p> : null}
+        </section>
+      ) : null}
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="grid gap-3 md:grid-cols-12">
           <label className="md:col-span-3">

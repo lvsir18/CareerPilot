@@ -40,7 +40,7 @@ from app.search.providers import (
     TavilySearchProvider,
     build_search_provider,
 )
-from app.search.taxonomy import classify_job_family, job_family_matches
+from app.search.taxonomy import classify_job_families, job_family_matches
 
 logger = get_logger(__name__)
 
@@ -142,7 +142,10 @@ class SearchService:
             pipeline.expire(key, 90)
             count, _ = pipeline.execute()
             if int(count) > self._settings.search_rate_limit_per_minute:
-                warnings.append(f"{provider_name} 搜索频率已达上限，请稍后再试")
+                limit = self._settings.search_rate_limit_per_minute
+                warnings.append(
+                    f"{provider_name} 每分钟最多 {limit} 次搜索，本次已跳过，请 1 分钟后重试"
+                )
                 return False
         except RedisError:
             warnings.append("搜索限流组件暂不可用，本次未限流")
@@ -556,7 +559,7 @@ class SearchService:
                     diag.dropped_filter += 1
                 continue
             if job_family and not job_family_matches(
-                classify_job_family(hit.title, hit.snippet), job_family
+                classify_job_families(hit.title, hit.snippet), job_family
             ):
                 if diag:
                     diag.dropped_filter += 1
