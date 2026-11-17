@@ -26,6 +26,7 @@ PUBLIC_DOCS = {
     "USER_GUIDE.md",
     "INTERVIEW_NOTES.md",
     "PUBLIC_STATUS.md",
+    "PROJECT_HISTORY.md",
     "PUBLIC_WEBSITE.md",
     "OPEN_SOURCE_RELEASE.md",
 }

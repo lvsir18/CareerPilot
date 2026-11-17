@@ -49,3 +49,7 @@ python3 scripts/export_open_source.py --output dist/open-source/CareerPilot
 ## 公开网站
 
 公开站源码位于 `apps/site/`，与本地手册共享内容与截图；`.github/workflows/pages.yml` 自动构建部署。首次公开推送后，在 Settings → Pages 把 Source 设为 GitHub Actions，再运行 Public website 工作流。详见 [公开站说明](PUBLIC_WEBSITE.md)。
+
+## 关键历史的公开整理
+
+首次发布后，维护者从完整本地历史中选取 16 个真实节点，重建脱敏里程碑快照，通过 `history/milestones` 分支合并接入 main。原公开提交及本地历史保留；没有直接推送原始旧历史。范围、日期与哈希对照见 [关键版本演进](PROJECT_HISTORY.md)。

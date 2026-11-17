@@ -46,6 +46,8 @@
 
 > **先了解再部署**：[公开首页](https://lvsir18.github.io/CareerPilot/) · [在线用户手册](https://lvsir18.github.io/CareerPilot/guide/) · [本地部署指引](https://lvsir18.github.io/CareerPilot/start/)（首次推送并启用 Pages 后生效）。
 
+> **项目演进**：[16 个关键版本与改动对照](docs/PROJECT_HISTORY.md) · [公开 Git 提交记录](https://github.com/lvsir18/CareerPilot/commits/main/)
+
 ## 界面预览
 
 > 以下来自独立演示环境，人物、企业、岗位与预约均为虚构。Agent 为预置演示对话，未调用模型。更多操作见[图文使用手册](docs/USER_GUIDE.md)。

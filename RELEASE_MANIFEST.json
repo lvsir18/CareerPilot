@@ -1,7 +1,7 @@
 {
   "kind": "curated-working-tree-export",
   "contains_git_history": false,
-  "note": "This export is not a security certification. Review before publishing.",
+  "note": "This manifest describes exported files, not the Git object database. Public Git history also includes sanitized milestone snapshots; see docs/PROJECT_HISTORY.md. This is not a security certification.",
   "files": [
     {
       "path": ".dockerignore",
@@ -69,7 +69,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "76b0d1739e1d05045e54b737dfa6ce1ee5a9b8e0936874c91fb303e1e8c14591"
+      "sha256": "c3cfd4affc06cb0b050415c94fe727c51a543c57abaa9d9ddb20e29d47e85aa4"
     },
     {
       "path": "SECURITY.md",
@@ -1604,6 +1604,10 @@
       "sha256": "99dd5aaf62c38f06d61331ebde319795e909ee817732307eba57c84d4586d12a"
     },
     {
+      "path": "docs/IMPLEMENTATION_STATUS.md",
+      "sha256": "fe863a3e00447e227694b41f591538706282408c4c86b783163a7898fadb0b57"
+    },
+    {
       "path": "docs/INTERVIEW_NOTES.md",
       "sha256": "58fc0432604ee025506763646a5d59b84ed75e75c0f95c2d215a98a7bf6a8860"
     },
@@ -1721,7 +1725,11 @@
     },
     {
       "path": "docs/OPEN_SOURCE_RELEASE.md",
-      "sha256": "cebddc35c62c2b7f36d5eaabd24b7e7d077c802a88867e873f64d523624f80ca"
+      "sha256": "c998d675cb952b30ba6ecb55336d771edd9c8c2f3f9df6d56be871b829d387db"
+    },
+    {
+      "path": "docs/PROJECT_HISTORY.md",
+      "sha256": "8c45f9837627404ec3692a02b9052ff49c80764a37889c16b541115080ecf8b4"
     },
     {
       "path": "docs/PUBLIC_STATUS.md",
@@ -1753,7 +1761,7 @@
     },
     {
       "path": "scripts/export_open_source.py",
-      "sha256": "ee721ad7d019ee3dd26870fa6cc205eec22d5258ae3fcd2f092912aa0492f484"
+      "sha256": "3cf8e13ac603c55a67821989bedcc68742cc5765d85742d1dada9ac9e4cb1ebf"
     },
     {
       "path": "scripts/m2r3_search_evaluation.py",
@@ -1774,11 +1782,14 @@
     {
       "path": "scripts/stop.sh",
       "sha256": "979a088ed60a48805a948012d8d00b0a38c821f9e9dc0dc4940ed59fe95e7d06"
-    },
-    {
-      "path": "docs/IMPLEMENTATION_STATUS.md",
-      "sha256": "fe863a3e00447e227694b41f591538706282408c4c86b783163a7898fadb0b57"
     }
   ],
-  "excluded_file_count": 529
+  "excluded_file_count": 529,
+  "public_history": {
+    "mode": "sanitized-milestone-snapshots",
+    "milestones": 16,
+    "branch": "history/milestones",
+    "original_private_history_included": false,
+    "details": "docs/PROJECT_HISTORY.md"
+  }
 }
