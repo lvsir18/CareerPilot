@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "site:build": "node ../../scripts/build_public_site.mjs",
+    "site:lint": "cd ../site && node ../web/node_modules/eslint/bin/eslint.js ."
   },
   "dependencies": {
     "clsx": "2.1.1",

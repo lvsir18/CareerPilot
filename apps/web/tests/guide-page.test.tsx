@@ -70,3 +70,53 @@ describe("使用手册页", () => {
     expect(screen.getByText(/没有 PWA \/ 原生 App/)).toBeVisible();
   });
 });
+
+// The manual keeps all chapter content available while search narrows navigation.
+describe("手册查找与截图", () => {
+  it("搜索正文可定位到操作小节，清空后恢复目录", async () => {
+    const { fireEvent, within } = await import("@testing-library/react");
+    render(<GuidePage />);
+    const nav = screen.getByRole("navigation", { name: "手册目录" });
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索手册" }), { target: { value: "协作式" } });
+    expect(within(nav).getByRole("link", { name: /执行与中断/ })).toHaveAttribute("href", "#agent-run");
+    expect(within(nav).queryByRole("link", { name: "页面地图" })).toBeNull();
+    expect(document.getElementById("pages")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+    expect(within(nav).getByRole("link", { name: "页面地图" })).toBeInTheDocument();
+  });
+
+  it("无匹配时给出提示，手机目录可展开并在跳转后收起", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    render(<GuidePage />);
+    const toggle = screen.getByRole("button", { name: /章节目录/ });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索手册" }), { target: { value: "zzzz-no-match" } });
+    expect(screen.getByRole("status")).toHaveTextContent("找到 0 个相关章节");
+    expect(screen.getByText(/没有找到结果/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+    const nav = screen.getByRole("navigation", { name: "手册目录" });
+    fireEvent.click(nav.querySelector('a[href="#profile"]')!);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("上下文截图具有替代文字、原图入口与演示说明", () => {
+    render(<GuidePage />);
+    expect(screen.getByRole("img", { name: "演示岗位推荐" })).toHaveAttribute("src", "/guide/matches.png");
+    expect(screen.getByRole("link", { name: "查看大图：Agent 预置演示对话" })).toHaveAttribute("href", "/guide/agent.png");
+    expect(screen.getAllByText(/虚构演示数据/).length).toBeGreaterThan(1);
+  });
+});
+
+describe("公开手册复用", () => {
+  it("公开模式保留章节跳转、重写业务入口并支持 Pages 图片前缀", async () => {
+    const { GuideReader } = await import("@/components/guide-reader");
+    render(<GuideReader publicSite assetPrefix="/CareerPilot" />);
+    expect(screen.getByRole("link", { name: /第一次部署/ })).toHaveAttribute("href", "#start");
+    const operationLinks = screen.getAllByRole("link", { name: "查看操作说明 →" });
+    expect(operationLinks.length).toBeGreaterThan(0);
+    for (const link of operationLinks) expect(link.getAttribute("href")).toMatch(/^#/);
+    expect(screen.getByRole("img", { name: "演示岗位推荐" })).toHaveAttribute("src", "/CareerPilot/guide/matches.png");
+    expect(screen.getByRole("link", { name: "回到首页" })).toHaveAttribute("href", "/");
+  });
+});

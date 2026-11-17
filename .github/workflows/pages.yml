@@ -1,0 +1,73 @@
+name: Public website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/site/**'
+      - 'apps/web/components/guide-reader.tsx'
+      - 'apps/web/components/guide-navigation.tsx'
+      - 'apps/web/lib/guide-content.ts'
+      - 'apps/web/public/**'
+      - 'apps/web/package*.json'
+      - 'apps/web/postcss.config.mjs'
+      - 'scripts/build_public_site.mjs'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'apps/site/**'
+      - 'apps/web/components/guide-*.tsx'
+      - 'apps/web/lib/guide-content.ts'
+      - 'apps/web/public/**'
+      - 'apps/web/package*.json'
+      - 'apps/web/postcss.config.mjs'
+      - 'scripts/build_public_site.mjs'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Check public site source
+        run: npm run site:lint
+      - name: Export static website
+        run: npm run site:build
+        env:
+          SITE_BASE_PATH: /${{ github.event.repository.name }}
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/public-site
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Deploy public website
+        id: deployment
+        uses: actions/deploy-pages@v4

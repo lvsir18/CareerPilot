@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import HomePage from "@/app/(app)/path/to/user
+import HomePage from "@/app/(app)/home/page";
 
 describe("首页介绍", () => {
   it("展示定位、四块能力与主要入口", () => {

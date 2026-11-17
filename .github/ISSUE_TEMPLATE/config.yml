@@ -1,9 +1,8 @@
-# 发布到 GitHub 前，把下面的 OWNER/REPO 换成真实仓库路径。
 blank_issues_enabled: false
 contact_links:
   - name: 使用手册（Markdown）
-    url: https://github.com/OWNER/REPO/blob/main/docs/USER_GUIDE.md
+    url: https://github.com/lvsir18/CareerPilot/blob/main/docs/USER_GUIDE.md
     about: 部署、账号、找岗位、维护、Agent 与多端访问的完整说明
   - name: 安全问题
-    url: https://github.com/OWNER/REPO/security/advisories/new
+    url: https://github.com/lvsir18/CareerPilot/security/advisories/new
     about: 请不要用公开 issue 报告漏洞，改用私下渠道（见 SECURITY.md）

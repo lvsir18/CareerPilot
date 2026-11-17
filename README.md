@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f.svg" /></a>
+  <a href="https://github.com/lvsir18/CareerPilot/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/lvsir18/CareerPilot/actions/workflows/ci.yml/badge.svg" /></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white" />
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white" />
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" />
@@ -13,10 +14,12 @@
 </p>
 
 <p align="center">
-  把求职从「海投」变成一条<b>可核验</b>的流程：岗位来自官网、匹配给依据、任务可恢复，数据全在你自己机器上。
+  把求职从「海投」变成一条<b>可核验</b>的流程：岗位来自官网、匹配给依据、任务可恢复，求职数据由你本地管理。
 </p>
 
 ---
+
+> 本地保存岗位、画像和申请记录；启用模型或搜索时，相关问题、画像或岗位内容会发送到你配置的外部服务商。
 
 ## 它解决什么问题
 
@@ -41,10 +44,20 @@
 - **投递跟进**：邮件（Gmail OAuth / QQ IMAP）识别面试与测评，进入看板、日历与申请时间线；
 - **多端**：响应式 Web，手机用同一 Wi-Fi 或 Tailscale 直接打开。
 
+> **先了解再部署**：[公开首页](https://lvsir18.github.io/CareerPilot/) · [在线用户手册](https://lvsir18.github.io/CareerPilot/guide/) · [本地部署指引](https://lvsir18.github.io/CareerPilot/start/)（首次推送并启用 Pages 后生效）。
+
+## 界面预览
+
+> 以下来自独立演示环境，人物、企业、岗位与预约均为虚构。Agent 为预置演示对话，未调用模型。更多操作见[图文使用手册](docs/USER_GUIDE.md)。
+
+| 岗位库与筛选 | Agent 工作台 |
+|---|---|
+| [![岗位库](apps/web/public/guide/jobs.png)](apps/web/public/guide/jobs.png) | [![预置演示对话](apps/web/public/guide/agent.png)](apps/web/public/guide/agent.png) |
+
 ## 快速开始
 
 ```bash
-git clone <repo-url> careerpilot && cd careerpilot
+git clone https://github.com/lvsir18/CareerPilot.git careerpilot && cd careerpilot
 cp .env.example .env          # 至少改 SESSION_SECRET / POSTGRES_PASSWORD / MAILBOX_SECRET_KEY
 docker compose up -d --build
 docker compose exec api alembic upgrade head
@@ -55,7 +68,7 @@ docker compose exec api alembic upgrade head
 ```bash
 # .env
 ADMIN_EMAILS=you@example.com
-docker compose restart api worker
+docker compose up -d api worker
 ```
 
 模型与搜索 Key 可以只配在设置页（每个账号独立），也可以在 `.env` 配一份服务端默认值。
@@ -66,7 +79,9 @@ docker compose restart api worker
 |---|---|
 | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | 完整使用手册（Markdown 版） |
 | `/guide`（界面内） | 图文手册，16 章，含自部署与配置速查 |
-| [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) | 每个功能的实现记录、验证方式与已知限制 |
+| [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) | 功能状态、验证记录与已知限制（发布包使用公开摘要） |
+| [`docs/PUBLIC_WEBSITE.md`](docs/PUBLIC_WEBSITE.md) | 公开站构建、Pages 发布与手册复用 |
+| [`docs/OPEN_SOURCE_RELEASE.md`](docs/OPEN_SOURCE_RELEASE.md) | 发布范围、独立导出与首次发布步骤 |
 | [`AGENTS.md`](AGENTS.md) | 代码约定、目录职责、测试要求（二次开发先读） |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 如何提 PR、如何新增一家企业直连 |
 | [`SECURITY.md`](SECURITY.md) | 漏洞报告方式与部署加固建议 |

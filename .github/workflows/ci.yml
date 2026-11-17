@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -45,6 +48,8 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
+      - name: Install browser for offline parser tests
+        run: python -m playwright install --with-deps chromium
       - name: Tests
         run: python -m pytest
 

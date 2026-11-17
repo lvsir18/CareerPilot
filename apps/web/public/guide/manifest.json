@@ -1,0 +1,99 @@
+{
+  "captured_on": "2026-11-17",
+  "environment": "isolated careerpilot-docs / careerpilot_docs database; no real user records or external API keys",
+  "disclosure": "All jobs, profile and appointments are fictional. Agent conversation is prefilled, not a live model result.",
+  "screenshots": [
+    {
+      "name": "home",
+      "route": "/home",
+      "title": "首页与核心功能导航",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "ce594135f3d895cccc71bf9ac57a69a5b178659468cbdbdc975c55a5f8f2f569"
+    },
+    {
+      "name": "dashboard",
+      "route": "/dashboard",
+      "title": "求职概览与预约提醒",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "0de57de6bacfba7155a9444d3368cf7e3e23b7d21892cd7aa5c2d83e573598d1"
+    },
+    {
+      "name": "jobs",
+      "route": "/jobs",
+      "title": "岗位库与演示岗位标签",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "be72cdf0cdfbc5aa94835762ad7c56dc8d37dd4061b269341c0de1bab0f40b38"
+    },
+    {
+      "name": "profile",
+      "route": "/profile",
+      "title": "演示画像与确认入口",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "8d22e00cdf0196e9849aa89f64ff8c5e9618fe1daac7974ffe488b97c7921884"
+    },
+    {
+      "name": "matches",
+      "route": "/matches",
+      "title": "可解释推荐与资格判断",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "e097cb2df80377d91c458e8cff15c15fb1b1a77dc716bbd7dbd09d7a7ad72d85"
+    },
+    {
+      "name": "applications",
+      "route": "/applications?view=kanban",
+      "title": "投递看板与阶段流转",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "f1d668f4a49c5436b687c3a09319f36be3672fca86505605728a6d36cfbae90f"
+    },
+    {
+      "name": "calendar",
+      "route": "/calendar",
+      "title": "明确预约的面试日程",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "2f78b4d2b060339227658f904495b35bd77b266696b7c30a9e054755630c8a27"
+    },
+    {
+      "name": "agent",
+      "route": "/agent",
+      "title": "预置演示对话与历史结果",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "13240849c127ca3a6a3a252fb6b5b162823e25ca727edb28bb630f2c3d616d67"
+    },
+    {
+      "name": "job-maintenance",
+      "route": "/jobs",
+      "title": "更新范围确认弹窗；未执行维护任务",
+      "width": 1600,
+      "height": 1050,
+      "synthetic": true,
+      "sha256": "2b3839e790135e057e175887563430341e924f2aaa14f0b6829cafadb8662237"
+    },
+    {
+      "name": "mobile",
+      "route": "/home",
+      "title": "手机端导航抽屉",
+      "width": 390,
+      "height": 844,
+      "synthetic": true,
+      "sha256": "a906f870065e8448d380da2cea934679fc471bafa2cd03c4bcc0307425eb96b9"
+    }
+  ],
+  "page_errors": [],
+  "demo_verification_note": "Complete synthetic fixtures are marked verified only in this isolated database, retaining is_demo=true; closed/adversarial fixtures are archived from the showcase."
+}

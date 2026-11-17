@@ -8,6 +8,7 @@
  */
 
 export type GuideBlock =
+  | { kind: "image"; src: string; alt: string; caption: string; width: number; height: number }
   | { kind: "p"; text: string }
   | { kind: "list"; items: string[] }
   | { kind: "steps"; items: { title: string; body: string; href?: string }[] }
@@ -57,7 +58,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
     blocks: [
       {
         kind: "p",
-        text: "CareerPilot 是一个本地 / 私有部署的求职工作台：把「找岗位、比画像、投递、跟进」串成一条链路，所有数据都存在你自己的机器上。",
+        text: "CareerPilot 是一个本地 / 私有部署的求职工作台：把「找岗位、比画像、投递、跟进」串成一条链路，求职数据保存在你的部署环境中；启用外部模型或搜索时，相关内容会发给所选服务商。",
       },
       {
         kind: "steps",
@@ -79,7 +80,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
           },
           {
             title: "投递与面试时间线",
-            body: "从邮件里识别投递、面试邀请，自动挂到日历上。",
+            body: "记录投递阶段与明确预约；邮件识别结果先作为候选，确认后写入时间线。",
             href: "/applications",
           },
         ],
@@ -105,7 +106,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
     id: "start",
     icon: "rocket",
     title: "快速开始（自部署）",
-    summary: "Docker 一键起服务，10 分钟内跑通",
+    summary: "从环境检查到第一次完整使用",
     subsections: [
       {
         id: "start-requirements",
@@ -134,7 +135,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
           {
             kind: "code",
             caption: "首次部署",
-            text: "git clone <repo-url> careerpilot\ncd careerpilot\ncp .env.example .env        # 按需修改，见「配置速查」\ndocker compose up -d --build\ndocker compose exec api alembic upgrade head",
+            text: "git clone https://github.com/lvsir18/CareerPilot.git careerpilot\ncd careerpilot\ncp .env.example .env        # 按需修改，见「配置速查」\ndocker compose up -d --build\ndocker compose exec api alembic upgrade head",
           },
           {
             kind: "code",
@@ -145,7 +146,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
           {
             kind: "tip",
             tone: "warn",
-            text: "第一个注册的账号不会自动成为管理员：把邮箱写进 .env 的 ADMIN_EMAILS（逗号分隔），再 docker compose restart api worker。",
+            text: "第一个注册的账号不会自动成为管理员：把邮箱写进 .env 的 ADMIN_EMAILS（逗号分隔），再 docker compose up -d api worker。",
           },
         ],
       },
@@ -647,7 +648,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
           {
             kind: "tip",
             tone: "warn",
-            text: "局域网 / Tailscale 访问若提示「请求来源不受信任」，把 .env 的 ALLOW_LAN_ORIGINS 设为 true 并重启 api；公网域名必须显式写进 CSRF_TRUSTED_ORIGINS。",
+            text: "局域网 / Tailscale 访问若提示「请求来源不受信任」，把 .env 的 ALLOW_LAN_ORIGINS 设为 true，再执行 docker compose up -d api；公网域名必须显式写进 CSRF_TRUSTED_ORIGINS。",
           },
         ],
       },
@@ -697,7 +698,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
         items: [
           "**忘记密码怎么办？** 登录页「忘记密码？」自助重置（需开启 PASSWORD_RESET_ENABLED）；已登录可在设置页「账号安全」改密。",
           "**手机打不开页面 / 登录后马上变未登录？** 确认在同一 Wi-Fi 或同一 Tailscale 网络，用 http://<电脑IP>:3000，不要用 localhost。",
-          "**手机提示「请求来源不受信任」？** 把 ALLOW_LAN_ORIGINS=true 并重启 api；用域名访问时把域名加进 CSRF_TRUSTED_ORIGINS。",
+          "**手机提示「请求来源不受信任」？** 设置 ALLOW_LAN_ORIGINS=true，再执行 docker compose up -d api；用域名访问时把域名加进 CSRF_TRUSTED_ORIGINS。",
           "**点了「更新岗位」好像还是同一批？** 复核是最久未检查优先，并默认跳过 6 小时内已成功复核的岗位；想扫全库把「跳过」设为不跳过、上限 200，连点两次。",
           "**为什么看不到「清理已下线」？** 这些是全局操作，只对 ADMIN_EMAILS 里的账号显示。",
           "**「发现新增」没有新岗位？** 官网列表按发布时间倒序，每家默认只看前 N 条；已入库时结果就是「内容未变」。可以提高深度或多关键词。",
@@ -729,7 +730,7 @@ export const GUIDE_SECTIONS: GuideSection[] = [
       },
       {
         kind: "p",
-        text: "数据与隐私：所有数据存在你自己的 Postgres 与本地文件目录；简历、邮箱凭据、API Key 都不出机器（除调用你配置的模型 / 搜索服务）。备份只需备份数据库卷与 FILE_STORAGE_DIR。",
+        text: "数据与隐私：岗位、画像、申请记录保存在你的 Postgres 与本地文件目录。启用外部模型或搜索后，相关问题、画像、JD 或检索词会发送给所选服务商；邮箱连接也会访问邮箱服务商。备份请使用项目脚本，并妥善保管加密密钥。",
       },
       {
         kind: "tip",
@@ -738,3 +739,63 @@ export const GUIDE_SECTIONS: GuideSection[] = [
     ],
   },
 ];
+
+// Contextual illustrations use an isolated demo database, never real accounts.
+const SCREENSHOTS: Record<string, [string, string, string]> = {
+  pages: ["home", "首页与核心功能导航", "先选择当前要完成的任务；首页和概览分别承担功能入口与进度汇总。"],
+  "profile-confirm": ["profile", "演示画像编辑页", "核对教育、技能与经历，再保存并确认画像。"],
+  "jobs-filter": ["jobs", "演示岗位库与筛选", "演示岗位带有专门标签；真实岗位应以官方详情页为准。"],
+  "jobs-maintain": ["job-maintenance", "岗位维护范围确认", "先核对范围、复核上限与发现深度，再启动任务；截图未执行更新。"],
+  matches: ["matches", "演示岗位推荐", "同时阅读匹配依据与资格判断，分数不等于录取概率。"],
+  "applications-board": ["applications", "演示投递看板", "看板表示申请阶段；进入申请详情登记明确的笔试或面试预约。"],
+  "applications-calendar": ["calendar", "演示面试日程", "只有明确预约进入日历；修改阶段不会自动预约。"],
+  "agent-multi-turn": ["agent", "Agent 预置演示对话", "这是预置对话，未调用模型，不代表真实招聘结果；用于说明历史与结果卡片的阅读方式。"],
+};
+for (const section of GUIDE_SECTIONS) {
+  for (const target of [section, ...(section.subsections ?? [])]) {
+    const shot = SCREENSHOTS[target.id];
+    if (!shot) continue;
+    const [name, alt, caption] = shot;
+    (target.blocks ??= []).push({ kind: "image", src: `/guide/${name}.png`, alt,
+      caption: `${caption} 图中人物、岗位与预约均为虚构演示数据。`, width: 1600, height: 1050 });
+  }
+}
+
+const OPERATION_HELP: Record<string, GuideBlock[]> = {
+  "profile-confirm": [
+    { kind: "steps", items: [
+      { title: "先校对再确认", body: "逐项检查毕业年份、学位、技能与到岗偏好，修正解析遗漏。不要把未实际掌握的技能加进画像。" },
+      { title: "检查保存结果", body: "保存成功后再确认；失败时保留当前内容，先处理提示再重试。看到已确认状态后，再去推荐页检查结果。", href: "/matches" },
+    ] },
+    { kind: "tip", tone: "warn", text: "扫描版 PDF 可能缺少可提取文字。解析为空时，请换文字版 PDF / DOCX，或手动完善画像；解析成功也需要你核对。" },
+  ],
+  import: [
+    { kind: "steps", items: [
+      { title: "复制岗位详情链接", body: "灰色企业入口用于打开官方招聘站。进入某个具体岗位，再复制地址；不要复制公司首页或岗位列表页。" },
+      { title: "检查预览再入库", body: "逐项核对职位名称、城市、职位描述与任职要求。若正文截断或要求为空，先到官网对照，不要直接确认。" },
+      { title: "读不到时改用粘贴", body: "需要登录或无法解析时，可以粘贴你已经核实的 JD。它是仅本人可见的私有内容，不会伪装成官方核验结果。" },
+    ] },
+    { kind: "tip", text: "遇到解析不完整，报告问题时附上官方链接、缺失字段、操作步骤和版本。请勿附带招聘平台 Cookie、登录口令或个人申请信息。" },
+  ],
+  matches: [{ kind: "table", head: ["你看到的情况", "下一步"], rows: [
+    ["提示画像未确认", "回到我的画像，先保存并确认，再刷新推荐。"],
+    ["推荐为空", "检查岗位库是否有已核验岗位，并放宽城市、类型或方向条件。"],
+    ["高分但资格不满足", "技能匹配与硬性资格是两项判断，先核对毕业届别、学历与到岗要求。"],
+  ] }],
+  "applications-calendar": [{ kind: "tip", text: "验收方法：先登记一条带明确时间的预约，回到日历查看；只把阶段改成面试，不应出现新日程。改期后再次检查原时段是否释放。邮件发送时间不等于预约时间。" }],
+  "agent-run": [{ kind: "table", head: ["状态 / 现象", "你可以怎么做"], rows: [
+    ["等待确认画像", "打开我的画像，保存并确认后回到原会话继续；未确认时不会跳过校验。"],
+    ["长时间执行中", "先看阶段进度，可离开页面稍后回来；不要反复提交同一问题。"],
+    ["已请求停止", "取消是协作式的，当前外部请求可能需要结束后才退出。"],
+    ["失败或部分完成", "阅读错误提示与已有结果；确认模型配置、网络或来源限制后再重试。"],
+  ] }],
+};
+for (const section of GUIDE_SECTIONS) {
+  for (const target of [section, ...(section.subsections ?? [])]) {
+    const help = OPERATION_HELP[target.id];
+    if (!help) continue;
+    const blocks = target.blocks ??= [];
+    const imageAt = blocks.findIndex((block) => block.kind === "image");
+    blocks.splice(imageAt < 0 ? blocks.length : imageAt, 0, ...help);
+  }
+}

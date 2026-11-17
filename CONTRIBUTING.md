@@ -16,11 +16,12 @@
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
+python -m playwright install chromium  # 离线 DOM 解析测试也需要浏览器
 ruff check . && ruff format --check .
 pytest -q
 
-# 前端
-cd apps/web
+# 前端（从 backend 目录切换）
+cd ../apps/web
 npm ci --include=optional
 npm run lint && npx tsc --noEmit
 npx vitest run

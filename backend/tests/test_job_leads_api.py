@@ -143,6 +143,16 @@ MINIMAX_JD = """# 大模型算法实习生
 """
 
 
+@pytest.fixture
+def extract_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These cases exercise extraction, independent of browser/network availability."""
+    monkeypatch.setattr(
+        "app.connectors.rendered_page.RenderedPageReader.available",
+        lambda _self: (False, "Offline test: exercise Tavily fallback"),
+    )
+
+
+@pytest.mark.usefixtures("extract_fallback")
 def test_verify_ats_lead_with_tavily_extract_creates_verified_job(
     app: FastAPI,
     settings: Settings,
@@ -198,6 +208,7 @@ def test_verify_ats_lead_with_tavily_extract_creates_verified_job(
     assert any(item.verification_method == "tavily_extract" for item in evidence)
 
 
+@pytest.mark.usefixtures("extract_fallback")
 def test_incomplete_extracted_jd_does_not_upgrade_lead(
     app: FastAPI,
     settings: Settings,
