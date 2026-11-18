@@ -1,7 +1,7 @@
-# CareerPilot · 求职工作台
+<h1 align="center">CareerPilot</h1>
 
 <p align="center">
-  <img src="apps/web/public/careerpilot-avatar.svg" width="88" alt="CareerPilot" />
+  <img src="apps/web/public/careerpilot-avatar.svg" width="176" height="176" alt="CareerPilot" />
 </p>
 
 <p align="center">
